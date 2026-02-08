@@ -70,4 +70,4 @@ pyinstaller imagemd.spec --clean
 El ejecutable resultante (`ImageMD.exe`) se generará en la carpeta `dist/`
 
 ### Releases
-Para uso inmediato sin configuración de entorno, descargue el ejecutable precompilado más reciente desde la sección de **Releases** de este repositorio.
+Para uso inmediato sin configuración de entorno, descargue el ejecutable precompilado más reciente desde la sección de [**Releases**](https://github.com/roymejia2217/ImageMD/releases/latest) de este repositorio.
