@@ -196,6 +196,24 @@ class PackageWorkflowTests(unittest.TestCase):
             "8fcb33017a0dc1058298c923c436d19dfa68ae93968e0b423248542e3afb9fc3", section
         )
         self.assertIn("python packaging/write_checksums.py", section)
+        self.assertIn(
+            "python packaging/release_assets.py --metadata artifacts/stage/release-metadata.json --normalize-directory artifacts/release",
+            section,
+        )
+        for name in ("metadata", "sbom", "checksums"):
+            with self.subTest(name=name):
+                self.assertIn(
+                    f"python packaging/release_assets.py --metadata artifacts/stage/release-metadata.json --name {name}",
+                    section,
+                )
+        self.assertIn("sbom-path: artifacts/release/${{ env.RELEASE_SBOM }}", section)
+        for legacy_name in (
+            "artifacts/release/ImageMD-release-metadata.json",
+            "artifacts/release/ImageMD.spdx.json",
+            "artifacts/release/SHA256SUMS",
+        ):
+            with self.subTest(legacy_name=legacy_name):
+                self.assertNotIn(legacy_name, section)
         self.assertEqual(section.count("uses: actions/attest@"), 2)
         self.assertIn("retention-days: 14", section)
         self.assertNotRegex(section, r"packaging/(?:debian|rpm|arch|appimage|flatpak)/")

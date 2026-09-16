@@ -52,10 +52,16 @@ jobs:
         shell: sh
         run: |
           set -eu
+          release_version="${{ inputs.tag }}"
+          release_version="${release_version#v}"
+          metadata_name="$(python packaging/release_assets.py --version "$release_version" --name metadata)"
+          sbom_name="$(python packaging/release_assets.py --version "$release_version" --name sbom)"
+          checksums_name="$(python packaging/release_assets.py --version "$release_version" --name checksums)"
           cd release
-          sha256sum --check SHA256SUMS
-          test -f ImageMD-release-metadata.json
-          candidate_version="$(python -c 'import json; print(json.load(open("ImageMD-release-metadata.json", encoding="utf-8"))["version"])')"
+          sha256sum --check "$checksums_name"
+          test -f "$metadata_name"
+          test -f "$sbom_name"
+          candidate_version="$(METADATA_FILE="$metadata_name" python -c 'import json, os; print(json.load(open(os.environ["METADATA_FILE"], encoding="utf-8"))["version"])')"
           test "v${candidate_version}" = "${{ inputs.tag }}"
           package_count="$(find . -maxdepth 1 -type f \( \
             -name '*.deb' -o \

@@ -125,7 +125,11 @@ class ReleasePromotionWorkflowTests(unittest.TestCase):
             "softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631"
         )
         self.assertEqual(self.workflow.count(release_action), 1)
-        self.assertIn("sha256sum --check SHA256SUMS", self.workflow)
+        self.assertIn('sha256sum --check "$checksums_name"', self.workflow)
+        self.assertIn(
+            'python packaging/release_assets.py --version "$release_version" --name metadata',
+            self.workflow,
+        )
         for artifact in ("*.deb", "*.rpm", "*.pkg.tar.zst", "*.AppImage", "*.flatpak"):
             with self.subTest(artifact=artifact):
                 self.assertIn(artifact, self.workflow)
@@ -134,7 +138,7 @@ class ReleasePromotionWorkflowTests(unittest.TestCase):
         self.assertRegex(self.workflow, r"(?m)(exactly|eq|==|\-eq)\s*5")
 
         validation_end = max(
-            self.workflow.index("sha256sum --check SHA256SUMS"),
+            self.workflow.index('sha256sum --check "$checksums_name"'),
             self.workflow.lower().index("spdx"),
         )
         self.assertGreater(self.workflow.index(release_action), validation_end)
@@ -146,10 +150,9 @@ class ReleasePromotionWorkflowTests(unittest.TestCase):
         release_index = self.workflow.index(release_action)
         validation = self.workflow[:release_index]
         self.assertRegex(validation, r"(?m)^\s+cd release\s*$")
-        self.assertRegex(
-            validation,
-            r"(?m)^\s+test\s+-f\s+ImageMD-release-metadata\.json\s*$",
-        )
+        self.assertIn('test -f "$metadata_name"', validation)
+        self.assertNotIn("ImageMD-release-metadata.json", validation)
+        self.assertIn('test -f "$sbom_name"', validation)
         self.assertRegex(validation, r"(?s)python\b.*?import json")
         self.assertRegex(
             validation,
@@ -172,8 +175,8 @@ class ReleasePromotionWorkflowTests(unittest.TestCase):
         validation = self.workflow[validation_start:release_index]
 
         entered_release = validation.index("cd release")
-        checksum = validation.index("sha256sum --check SHA256SUMS")
-        metadata = validation.index("ImageMD-release-metadata.json")
+        checksum = validation.index('sha256sum --check "$checksums_name"')
+        metadata = validation.index("candidate_version=")
         self.assertLess(entered_release, checksum)
         self.assertLess(
             checksum,
@@ -226,7 +229,7 @@ class ReleasePromotionWorkflowTests(unittest.TestCase):
         )
         self.assertNotIn("GH_TOKEN:", outside_attestation)
 
-        checksum_index = self.workflow.index("sha256sum --check SHA256SUMS")
+        checksum_index = self.workflow.index('sha256sum --check "$checksums_name"')
         package_count_matches = list(
             re.finditer(r"(?i)(?:exactly|eq|==)\s*5|\-eq\s*5", self.workflow)
         )

@@ -402,14 +402,19 @@ jobs:
           test "$(find artifacts/release -maxdepth 1 -type f -name '*.pkg.tar.zst' | wc -l)" -eq 1
           test "$(find artifacts/release -maxdepth 1 -type f -name '*.AppImage' | wc -l)" -eq 1
           test "$(find artifacts/release -maxdepth 1 -type f -name '*.flatpak' | wc -l)" -eq 1
-          cp artifacts/stage/release-metadata.json artifacts/release/ImageMD-release-metadata.json
+          python packaging/release_assets.py --metadata artifacts/stage/release-metadata.json --normalize-directory artifacts/release
+          metadata_name="$(python packaging/release_assets.py --metadata artifacts/stage/release-metadata.json --name metadata)"
+          sbom_name="$(python packaging/release_assets.py --metadata artifacts/stage/release-metadata.json --name sbom)"
+          checksums_name="$(python packaging/release_assets.py --metadata artifacts/stage/release-metadata.json --name checksums)"
+          printf 'RELEASE_SBOM=%s\n' "$sbom_name" >> "$GITHUB_ENV"
+          cp artifacts/stage/release-metadata.json "artifacts/release/$metadata_name"
           mkdir -p artifacts/tools
           curl --fail --location --silent --show-error --output artifacts/tools/syft_1.51.1_linux_amd64.tar.gz https://github.com/anchore/syft/releases/download/v1.51.1/syft_1.51.1_linux_amd64.tar.gz
           printf '%s  %s\n' 8fcb33017a0dc1058298c923c436d19dfa68ae93968e0b423248542e3afb9fc3 artifacts/tools/syft_1.51.1_linux_amd64.tar.gz | sha256sum --check --strict
           tar -xzf artifacts/tools/syft_1.51.1_linux_amd64.tar.gz --directory artifacts/tools
           chmod +x artifacts/tools/syft
-          artifacts/tools/syft dir:artifacts/release --output spdx-json=artifacts/release/ImageMD.spdx.json
-          python packaging/write_checksums.py --artifacts artifacts/release --output artifacts/release/SHA256SUMS
+          artifacts/tools/syft dir:artifacts/release --output "spdx-json=artifacts/release/$sbom_name"
+          python packaging/write_checksums.py --artifacts artifacts/release --output "artifacts/release/$checksums_name"
 
       - name: Attest release artifacts provenance
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d
@@ -420,7 +425,7 @@ jobs:
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d
         with:
           subject-path: artifacts/release/*
-          sbom-path: artifacts/release/ImageMD.spdx.json
+          sbom-path: artifacts/release/${{ env.RELEASE_SBOM }}
 
       - name: Upload release candidate artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
