@@ -17,6 +17,11 @@ try:
 except ImportError:
     validate_commit_subjects = None  # type: ignore[assignment]
 
+try:
+    from ci.governance import validate_governance_changes
+except ImportError:
+    validate_governance_changes = None  # type: ignore[assignment]
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -369,6 +374,289 @@ class CommitsCliContractTests(unittest.TestCase):
             combined,
             "commit validator must identify the ordinal of the invalid subject",
         )
+
+
+class GovernanceChangesContractTests(unittest.TestCase):
+    REJECTED_PATHS = (
+        ".github/workflows/verify.yml",
+        ".github/workflows/new-workflow.yml",
+        ".github/actions/example/action.yml",
+        "ci/governance.py",
+        "ci/new_policy.py",
+        "tests/test_architecture_contract.py",
+        "tests/test_pr_governance.py",
+        "tests/test_pr_governance_workflow.py",
+        "tests/test_quality_workflow_contract.py",
+    )
+
+    ACCEPTED_PATHS = (
+        "src/application/foo.py",
+        "src/adapters/foo.py",
+        "tests/test_product_feature.py",
+        "README.md",
+        "CONTRIBUTING.md",
+    )
+
+    def _validator(self):
+        self.assertTrue(
+            callable(validate_governance_changes),
+            "ci.governance must expose validate_governance_changes(records)",
+        )
+        return validate_governance_changes
+
+    def test_constants_match_canonical_root(self):
+        from ci import governance as gov
+
+        self.assertEqual(
+            tuple(getattr(gov, "PROTECTED_GOVERNANCE_PREFIXES", ())),
+            (".github/workflows/", ".github/actions/", "ci/"),
+        )
+        self.assertEqual(
+            set(getattr(gov, "PROTECTED_GOVERNANCE_PATHS", set())),
+            {
+                "tests/test_architecture_contract.py",
+                "tests/test_pr_governance.py",
+                "tests/test_pr_governance_workflow.py",
+                "tests/test_quality_workflow_contract.py",
+            },
+        )
+
+    def test_protected_paths_are_rejected(self):
+        validate = self._validator()
+        for path in self.REJECTED_PATHS:
+            with self.subTest(path=path):
+                records = [{"filename": path, "previous_filename": None}]
+                errors = validate(records)
+                self.assertTrue(errors, f"protected path must be rejected: {path}")
+                self.assertIn(path, "\n".join(errors))
+
+    def test_ordinary_paths_are_accepted(self):
+        validate = self._validator()
+        records = [
+            {"filename": path, "previous_filename": None}
+            for path in self.ACCEPTED_PATHS
+        ]
+        self.assertEqual(validate(records), [])
+
+    def test_protected_to_unprotected_rename_is_rejected(self):
+        validate = self._validator()
+        records = [
+            {
+                "filename": "src/application/foo.py",
+                "previous_filename": "ci/governance.py",
+            }
+        ]
+        errors = validate(records)
+        self.assertTrue(errors)
+        self.assertIn("ci/governance.py", "\n".join(errors))
+
+    def test_unprotected_to_protected_rename_is_rejected(self):
+        validate = self._validator()
+        records = [
+            {
+                "filename": "ci/new_policy.py",
+                "previous_filename": "src/application/foo.py",
+            }
+        ]
+        errors = validate(records)
+        self.assertTrue(errors)
+        self.assertIn("ci/new_policy.py", "\n".join(errors))
+
+    def test_malformed_records_fail_closed(self):
+        validate = self._validator()
+        malformed_collections = [
+            [{"previous_filename": None}],
+            [{"filename": "", "previous_filename": None}],
+            [{"filename": "/absolute/path.py", "previous_filename": None}],
+            [{"filename": "../escape.py", "previous_filename": None}],
+            [{"filename": 123, "previous_filename": None}],
+            [{"filename": "src/ok.py", "previous_filename": "/absolute/old.py"}],
+            [{"filename": "src/ok.py", "previous_filename": "../old.py"}],
+            ["not-a-dict"],
+            "not-a-list",
+            None,
+        ]
+        for records in malformed_collections:
+            with self.subTest(records=records):
+                self.assertTrue(validate(records))
+
+
+def run_trusted_pr_cli(title, body, commits_text=None, files_text=None):
+    """Execute trusted-pr CLI with temp files; return completed process."""
+    body_handle = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".md", encoding="utf-8", delete=False
+    )
+    body_handle.write(body)
+    body_handle.close()
+    commits_path = None
+    files_path = None
+    try:
+        if commits_text is not None:
+            commits_handle = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", encoding="utf-8", delete=False
+            )
+            commits_handle.write(commits_text)
+            commits_handle.close()
+            commits_path = commits_handle.name
+        else:
+            commits_path = "/nonexistent-commits.json"
+        if files_text is not None:
+            files_handle = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", encoding="utf-8", delete=False
+            )
+            files_handle.write(files_text)
+            files_handle.close()
+            files_path = files_handle.name
+        else:
+            files_path = "/nonexistent-files.json"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ci.governance",
+                "trusted-pr",
+                "--title",
+                title,
+                "--body-file",
+                body_handle.name,
+                "--commits-file",
+                commits_path,
+                "--files-file",
+                files_path,
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        Path(body_handle.name).unlink(missing_ok=True)
+        if commits_path is not None and commits_path.startswith("/tmp"):
+            Path(commits_path).unlink(missing_ok=True)
+        if files_path is not None and files_path.startswith("/tmp"):
+            Path(files_path).unlink(missing_ok=True)
+    return completed
+
+
+class TrustedPrContractTests(unittest.TestCase):
+    import json as _json
+
+    VALID_TITLE = "feat: add Windows release builder"
+    SHA_A = "a" * 40
+    SHA_B = "b" * 40
+    SHA_C = "c" * 40
+
+    def _commits(self, subjects):
+        import json
+
+        shas = [self.SHA_A, self.SHA_B, self.SHA_C]
+        records = [
+            {"sha": shas[i % len(shas)], "subject": subject}
+            for i, subject in enumerate(subjects)
+        ]
+        return json.dumps(records)
+
+    def _files(self, filenames):
+        import json
+
+        return json.dumps(
+            [{"filename": name, "previous_filename": None} for name in filenames]
+        )
+
+    def test_valid_trusted_pr_exits_zero(self):
+        completed = run_trusted_pr_cli(
+            self.VALID_TITLE,
+            VALID_BODY,
+            self._commits(["feat: add builder", "fix: repair build"]),
+            self._files(["src/application/foo.py"]),
+        )
+        self.assertEqual(completed.returncode, 0, msg=completed.stderr)
+
+    def test_malformed_commit_json_fails_closed(self):
+        completed = run_trusted_pr_cli(
+            self.VALID_TITLE,
+            VALID_BODY,
+            "not json",
+            self._files(["src/application/foo.py"]),
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("commit", (completed.stderr or "").lower())
+
+    def test_malformed_file_json_fails_closed(self):
+        completed = run_trusted_pr_cli(
+            self.VALID_TITLE,
+            VALID_BODY,
+            self._commits(["feat: add builder"]),
+            "not json",
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("file", (completed.stderr or "").lower())
+
+    def test_empty_commit_collection_fails_closed(self):
+        completed = run_trusted_pr_cli(
+            self.VALID_TITLE, VALID_BODY, "[]", self._files(["src/application/foo.py"])
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("commit", (completed.stderr or "").lower())
+
+    def test_invalid_second_commit_is_detected(self):
+        completed = run_trusted_pr_cli(
+            self.VALID_TITLE,
+            VALID_BODY,
+            self._commits(["feat: first change", "Update files", "fix: third change"]),
+            self._files(["src/application/foo.py"]),
+        )
+        self.assertEqual(completed.returncode, 2)
+        stderr = completed.stderr or ""
+        self.assertIn("Update files", stderr)
+        self.assertIn("2", stderr)
+
+    def test_invalid_third_commit_is_detected(self):
+        completed = run_trusted_pr_cli(
+            self.VALID_TITLE,
+            VALID_BODY,
+            self._commits(["feat: first", "fix: second", "not conventional"]),
+            self._files(["src/application/foo.py"]),
+        )
+        self.assertEqual(completed.returncode, 2)
+        stderr = completed.stderr or ""
+        self.assertIn("not conventional", stderr)
+        self.assertIn("3", stderr)
+
+    def test_trusted_path_preserves_subject_policy(self):
+        for bad in (
+            "feat: add thing\nFixes: #1",
+            "   ",
+            "feat: " + "x" * 67,
+        ):
+            with self.subTest(bad=bad):
+                completed = run_trusted_pr_cli(
+                    self.VALID_TITLE,
+                    VALID_BODY,
+                    self._commits([bad]),
+                    self._files(["src/application/foo.py"]),
+                )
+                self.assertEqual(completed.returncode, 2, msg=bad)
+
+    def test_changed_files_validated_independently_of_commits(self):
+        completed = run_trusted_pr_cli(
+            self.VALID_TITLE,
+            VALID_BODY,
+            self._commits(["feat: valid change"]),
+            self._files(["src/application/foo.py", "ci/governance.py"]),
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("ci/governance.py", completed.stderr or "")
+
+    def test_one_protected_path_makes_trusted_pr_invalid(self):
+        completed = run_trusted_pr_cli(
+            self.VALID_TITLE,
+            VALID_BODY,
+            self._commits(["feat: valid change"]),
+            self._files(["tests/test_pr_governance.py"]),
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("tests/test_pr_governance.py", completed.stderr or "")
 
 
 if __name__ == "__main__":
