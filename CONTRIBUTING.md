@@ -62,12 +62,16 @@ workflow and ruleset remain authoritative when this prose disagrees.
 
 ## Branch and release rules
 
-- Direct `main` pushes will be disabled by repository rules after bootstrap.
-  Land changes through pull requests only.
+- Direct `main` pushes are blocked by active repository rules. Land changes
+  through pull requests only.
+- Version selection follows the executable policy documented in
+  [VERSIONING.md](VERSIONING.md). `src.__version__` is the canonical source,
+  and Required CI verifies the next SemVer target from reachable release tags
+  and Conventional Commit history.
 - Release tags are separate from development commits. A release is published
-  from an immutable tag through the existing package and promotion contracts.
-- Existing published tags must not be moved to retrofit later changes. Cut a
-  new tag instead.
+  from a tag whose version exactly matches the tagged source revision.
+- Existing published tags must not be moved or reused to retrofit later
+  changes. Cut a new version instead.
 - Release publication requires the existing package and promotion contracts
   (`package.yml`, `release-guard.yml`, `promote-release.yml`); this process
   document does not replace them.
