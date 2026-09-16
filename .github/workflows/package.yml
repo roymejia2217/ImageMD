@@ -240,6 +240,12 @@ jobs:
             exit 1
           fi
 
+      - name: Restore runner ownership of the artifacts tree
+        shell: sh
+        run: |
+          set -eu
+          sudo chown -R "$(id -u):$(id -g)" artifacts
+
       - name: Install and remove the Arch package in a clean container
         shell: sh
         run: |

@@ -564,6 +564,28 @@ class PackageWorkflowTests(unittest.TestCase):
             step, r"(?i)(?:continue-on-error:\s*true|if:\s*false|skip.*namcap)"
         )
 
+    def test_artifacts_ownership_is_restored_before_appimage(self):
+        restore_match = re.search(
+            r"(?ms)^      - name: Restore runner ownership of the artifacts tree\n"
+            r".*?(?=^      - name:|\Z)",
+            self.workflow,
+        )
+        self.assertIsNotNone(restore_match)
+        restore_step = restore_match.group(0)
+        self.assertIn("shell: sh", restore_step)
+        self.assertRegex(restore_step, r"(?m)^          set -eu$")
+        self.assertIn('sudo chown -R "$(id -u):$(id -g)" artifacts', restore_step)
+
+        arch_index = self.workflow.index("- name: Build and lint the Arch package")
+        restore_index = self.workflow.index(
+            "- name: Restore runner ownership of the artifacts tree"
+        )
+        appimage_index = self.workflow.index(
+            "- name: Build and validate the reproducible AppImage bundle"
+        )
+        self.assertLess(arch_index, restore_index)
+        self.assertLess(restore_index, appimage_index)
+
     def test_appimage_block_builds_and_validates_reproducible_bundle(self):
         lines = self.workflow.splitlines()
         run_blocks = []
