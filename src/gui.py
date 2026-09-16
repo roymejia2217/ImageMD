@@ -57,6 +57,8 @@ from .config import (
     TXT_STATUS_SCANNING,
 )
 from .date_utils import DateExtractor
+from .adapters import storage_transaction
+from .adapters.png_validation import PillowPngValidator
 from .media_ops import MediaMetadataManager
 from .repair import ImageRepairTool
 from .application.apply_metadata import ApplyKind, ApplyPolicy, MetadataApplyService
@@ -87,7 +89,9 @@ class ImageMetadataApp(ttk.Window):
             automatic_write_confidence=AUTOMATIC_WRITE_CONFIDENCE,
         )
         self.apply_service = MetadataApplyService(
-            self.media_manager, ApplyPolicy(self.temporal_policy, BACKUP_SUFFIX)
+            self.media_manager,
+            ApplyPolicy(self.temporal_policy, BACKUP_SUFFIX),
+            storage_transaction,
         )
         self.scan_service = MediaScanService(
             self.date_extractor,
@@ -99,7 +103,12 @@ class ImageMetadataApp(ttk.Window):
                 DEEP_SCAN_CONFIDENCE,
             ),
         )
-        self.repair_service = PngRepairService(policy=RepairPolicy(BACKUP_SUFFIX))
+        self.repair_service = PngRepairService(
+            writer=self.repair_tool,
+            policy=RepairPolicy(BACKUP_SUFFIX),
+            validator=PillowPngValidator(),
+            storage=storage_transaction,
+        )
 
         self.files_data = []
         self.ui_queue = queue.Queue()

@@ -2,63 +2,24 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
 import hashlib
 import os
 from pathlib import Path
 import shutil
 import stat
 import tempfile
-from typing import Generic, TypeVar
+from typing import TypeVar
+
+from src.application.ports import (
+    CommitReceipt,
+    ErrorCode,
+    FileSnapshot,
+    OperationResult,
+    StagedFile,
+)
 
 
 T = TypeVar("T")
-
-
-class ErrorCode(str, Enum):
-    INVALID_PATH = "invalid_path"
-    NOT_FOUND = "not_found"
-    IO_ERROR = "io_error"
-    SOURCE_CHANGED = "source_changed"
-    STAGED_DIGEST_MISMATCH = "staged_digest_mismatch"
-    BACKUP_EXISTS = "backup_exists"
-    BACKUP_PATH_INVALID = "backup_path_invalid"
-    REPLACE_FAILED = "replace_failed"
-    CLEANUP_FAILED = "cleanup_failed"
-
-
-@dataclass(frozen=True, slots=True)
-class OperationResult(Generic[T]):
-    value: T | None
-    error: ErrorCode | None = None
-
-    @property
-    def succeeded(self) -> bool:
-        return self.error is None
-
-
-@dataclass(frozen=True, slots=True)
-class FileSnapshot:
-    path: Path
-    size: int
-    sha256: str
-
-
-@dataclass(frozen=True, slots=True)
-class StagedFile:
-    source: FileSnapshot
-    path: Path
-
-
-@dataclass(frozen=True, slots=True)
-class CommitReceipt:
-    path: Path
-    backup_path: Path
-    previous_size: int
-    previous_sha256: str
-    committed_size: int
-    committed_sha256: str
 
 
 def snapshot_file(path: str | os.PathLike[str]) -> OperationResult[FileSnapshot]:
@@ -185,6 +146,13 @@ def commit_staged_file(
             committed_sha256=staged_digest,
         )
     )
+
+
+def discard_staged_file(staged: StagedFile) -> bool:
+    """Remove only the supplied staged file via the internal cleanup mechanism."""
+    if not isinstance(staged, StagedFile):
+        return False
+    return _remove_file(staged.path)
 
 
 def _validated_absolute_path(path: str | os.PathLike[str]) -> Path | None:

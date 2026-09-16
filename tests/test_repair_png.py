@@ -6,12 +6,14 @@ import unittest
 
 from PIL import Image
 
+from src.adapters import storage_transaction
+from src.adapters.png_validation import PillowPngValidator
 from src.application.repair_png import (
     PngRepairService,
     RepairKind,
     RepairPolicy,
 )
-from src.repair import PngWriteKind, PngWriteResult
+from src.repair import ImageRepairTool, PngWriteKind, PngWriteResult
 
 
 def valid_png_bytes() -> bytes:
@@ -43,7 +45,12 @@ class TestPngRepair(unittest.TestCase):
         self.policy = RepairPolicy(".bak")
 
     def test_success_commits_verified_png_and_keeps_exact_backup(self):
-        result = PngRepairService(policy=self.policy).repair(str(self.source))
+        result = PngRepairService(
+            ImageRepairTool(),
+            self.policy,
+            PillowPngValidator(),
+            storage_transaction,
+        ).repair(str(self.source))
 
         self.assertEqual(result.kind, RepairKind.REPAIRED)
         self.assertEqual(
@@ -58,9 +65,12 @@ class TestPngRepair(unittest.TestCase):
         self.assertFalse(list(self.directory.glob("*.stage.png")))
 
     def test_validation_failure_preserves_source_and_removes_staging(self):
-        result = PngRepairService(FailingValidationWriter(), self.policy).repair(
-            str(self.source)
-        )
+        result = PngRepairService(
+            FailingValidationWriter(),
+            self.policy,
+            PillowPngValidator(),
+            storage_transaction,
+        ).repair(str(self.source))
 
         self.assertEqual(result.kind, RepairKind.VALIDATION_FAILED)
         self.assertEqual(self.source.read_bytes(), self.original)
@@ -71,7 +81,12 @@ class TestPngRepair(unittest.TestCase):
         original = b"not a png, and no IHDR"
         self.source.write_bytes(original)
 
-        result = PngRepairService(policy=self.policy).repair(str(self.source))
+        result = PngRepairService(
+            ImageRepairTool(),
+            self.policy,
+            PillowPngValidator(),
+            storage_transaction,
+        ).repair(str(self.source))
 
         self.assertEqual(result.kind, RepairKind.REJECTED)
         self.assertEqual(self.source.read_bytes(), original)
@@ -79,9 +94,12 @@ class TestPngRepair(unittest.TestCase):
         self.assertFalse(list(self.directory.glob("*.stage.png")))
 
     def test_independent_verification_rejects_a_dishonest_writer(self):
-        result = PngRepairService(DishonestWriter(), self.policy).repair(
-            str(self.source)
-        )
+        result = PngRepairService(
+            DishonestWriter(),
+            self.policy,
+            PillowPngValidator(),
+            storage_transaction,
+        ).repair(str(self.source))
 
         self.assertEqual(result.kind, RepairKind.VALIDATION_FAILED)
         self.assertEqual(self.source.read_bytes(), self.original)

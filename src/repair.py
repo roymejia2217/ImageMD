@@ -2,28 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
 from io import BytesIO
 from pathlib import Path
 
 from PIL import Image
 
-
-class PngWriteKind(str, Enum):
-    WRITTEN = "written"
-    NOT_REPAIRABLE = "not_repairable"
-    WRITE_FAILED = "write_failed"
-    VALIDATION_FAILED = "validation_failed"
-
-
-@dataclass(frozen=True, slots=True)
-class PngWriteResult:
-    kind: PngWriteKind
-
-    @property
-    def succeeded(self) -> bool:
-        return self.kind is PngWriteKind.WRITTEN
+from src.application.ports import PngWriteKind, PngWriteResult
 
 
 class ImageRepairTool:
