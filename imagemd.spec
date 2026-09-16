@@ -10,6 +10,7 @@ datas, binaries, hiddenimports = collect_all('ttkbootstrap')
 # Asegurar que se incluyan dependencias críticas que a veces el análisis estático pierde
 hiddenimports += [
     'PIL', 
+    'PIL._tkinter_finder',
     'piexif', 
     'ffmpeg', 
     'tkinter', 
@@ -25,7 +26,7 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=['src/runtime_hooks/tcl_module_path.py'],
     excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

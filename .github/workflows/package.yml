@@ -1,0 +1,381 @@
+name: Package contract
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  package-contract:
+    name: Deterministic package preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out the triggering ref
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Set up CPython
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up locked dependency resolver
+        uses: astral-sh/setup-uv@2ddd2b9cb38ad8efd50337e8ab201519a34c9f24 # v7.1.1
+        with:
+          version: "0.11.32"
+          enable-cache: false
+
+      - name: Require an exact version tag
+        shell: sh
+        run: |
+          set -eu
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            printf 'Package workflow requires a tag ref; received %s.\n' "$GITHUB_REF"
+            exit 1
+          fi
+          version="$(python -c 'from src import __version__; print(__version__)')"
+          expected_tag="v${version}"
+          if [ "$GITHUB_REF_NAME" != "$expected_tag" ]; then
+            printf 'Tag %s does not match project version tag %s.\n' "$GITHUB_REF_NAME" "$expected_tag"
+            exit 1
+          fi
+
+      - name: Set the source date epoch
+        shell: sh
+        run: |
+          set -eu
+          printf 'SOURCE_DATE_EPOCH=%s\n' "$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      - name: Verify the dependency lock
+        shell: sh
+        run: |
+          set -eu
+          uv lock --check
+
+      - name: Install exactly locked dependencies
+        shell: sh
+        run: |
+          set -eu
+          uv sync --locked
+
+      - name: Run the complete unittest suite
+        shell: sh
+        run: |
+          set -eu
+          uv run python -m unittest discover -v
+
+      - name: Build the pinned PyInstaller image
+        shell: sh
+        run: |
+          set -eu
+          mkdir -p artifacts
+          docker build \
+            --file packaging/container/Dockerfile.pyinstaller \
+            --tag imagemd-pyinstaller:ci \
+            .
+
+      - name: Build the standalone application bundle
+        shell: sh
+        run: |
+          set -eu
+          mkdir -p artifacts/bundle
+          mkdir -p artifacts/reproducibility-bundle
+          docker run --rm \
+            --env PYTHONHASHSEED=1 \
+            --env SOURCE_DATE_EPOCH \
+            --volume "$PWD:/workspace" \
+            --workdir /workspace \
+            imagemd-pyinstaller:ci \
+            --clean --distpath artifacts/bundle imagemd.spec
+          test -f artifacts/bundle/ImageMD
+          docker run --rm \
+            --env PYTHONHASHSEED=1 \
+            --env SOURCE_DATE_EPOCH \
+            --volume "$PWD:/workspace" \
+            --workdir /workspace \
+            imagemd-pyinstaller:ci \
+            --clean --workpath /tmp/imagemd-repro-work --distpath artifacts/reproducibility-bundle imagemd.spec
+          test -f artifacts/reproducibility-bundle/ImageMD
+          cmp --silent artifacts/bundle/ImageMD artifacts/reproducibility-bundle/ImageMD
+
+      - name: Create the package staging tree
+        shell: sh
+        run: |
+          set -eu
+          python packaging/build_stage.py \
+            --bundle artifacts/bundle/ImageMD \
+            --output artifacts/stage
+          test -f artifacts/stage/release-metadata.json
+          test -f artifacts/stage/rootfs/usr/bin/imagemd
+
+      - name: Build and inspect the Debian package
+        shell: sh
+        run: |
+          set -eu
+          python packaging/debian/build_deb.py \
+            --stage artifacts/stage \
+            --output artifacts/imagemd.deb
+          dpkg-deb --info artifacts/imagemd.deb
+          dpkg-deb --contents artifacts/imagemd.deb
+
+      - name: Install the Debian package in a clean container
+        shell: sh
+        run: |
+          set -eu
+          docker run --rm \
+            --volume "$PWD/artifacts:/artifacts:ro" \
+            debian@sha256:6ebd97fa83deb272194a2cf015b3d26a4d538e9ad3a7a79d544c8af5b0a01443 \
+            sh -eu -c '
+              apt-get update
+              apt-get install -y --no-install-recommends ffmpeg
+              dpkg -i /artifacts/imagemd.deb
+              test -x /usr/bin/imagemd
+            '
+
+      - name: Build the pinned RPM builder image
+        shell: sh
+        run: |
+          set -eu
+          docker build \
+            --file packaging/container/Dockerfile.rpm \
+            --tag imagemd-rpm-builder:ci \
+            .
+
+      - name: Build and lint the RPM package
+        shell: sh
+        run: |
+          set -eu
+          docker run --rm \
+            --env SOURCE_DATE_EPOCH \
+            --volume "$PWD:/workspace" \
+            --workdir /workspace \
+            imagemd-rpm-builder:ci \
+            python packaging/rpm/build_rpm.py \
+              --stage artifacts/stage \
+              --output-directory artifacts/rpm
+          test "$(find artifacts/rpm -maxdepth 1 -type f -name '*.x86_64.rpm' | wc -l)" -eq 1
+          if ! docker run --rm \
+            --volume "$PWD:/workspace" \
+            --workdir /workspace \
+            imagemd-rpm-builder:ci \
+            rpmlint artifacts/rpm/*.x86_64.rpm > "$RUNNER_TEMP/rpmlint.log" 2>&1; then
+            cat "$RUNNER_TEMP/rpmlint.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/rpmlint.log"
+          if grep -Eq ': [EW]:' "$RUNNER_TEMP/rpmlint.log"; then
+            exit 1
+          fi
+
+      - name: Install and remove the RPM in a clean Fedora container
+        shell: sh
+        run: |
+          set -eu
+          docker run --rm \
+            --volume "$PWD/artifacts:/artifacts:ro" \
+            fedora:42@sha256:99e203b80b1c3d8f7e161ec10a68fd02b081ef83a3963553e513c82846b97814 \
+            sh -eu -c '
+              dnf --assumeyes install /artifacts/rpm/*.x86_64.rpm
+              test -x /usr/bin/imagemd
+              dnf --assumeyes remove imagemd
+              test ! -e /usr/bin/imagemd
+            '
+
+      - name: Prepare the Arch package output directory
+        shell: sh
+        run: |
+          set -eu
+          docker build \
+            --file packaging/container/Dockerfile.arch \
+            --tag imagemd-arch-builder:ci \
+            .
+          docker run --rm \
+            --user root \
+            --volume "$PWD/artifacts:/artifacts" \
+            imagemd-arch-builder:ci \
+            chown builder:builder /artifacts
+
+      - name: Build and lint the Arch package
+        shell: sh
+        run: |
+          set -eu
+          docker run --rm \
+            --env SOURCE_DATE_EPOCH \
+            --volume "$PWD:/workspace" \
+            --workdir /workspace \
+            --user builder \
+            imagemd-arch-builder:ci \
+            python packaging/arch/build_arch.py \
+              --stage artifacts/stage \
+              --output artifacts/arch
+          docker run --rm \
+            --volume "$PWD:/workspace" \
+            --workdir /workspace/artifacts/arch \
+            --user builder \
+            imagemd-arch-builder:ci \
+            makepkg --noconfirm --syncdeps --cleanbuild
+          test "$(find artifacts/arch -maxdepth 1 -type f -name '*.pkg.tar.zst' | wc -l)" -eq 1
+          if ! docker run --rm \
+            --volume "$PWD:/workspace" \
+            --workdir /workspace/artifacts/arch \
+            --user builder \
+            imagemd-arch-builder:ci \
+            sh -ceu 'namcap ./*.pkg.tar.zst' > "$RUNNER_TEMP/namcap.log" 2>&1; then
+            cat "$RUNNER_TEMP/namcap.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/namcap.log"
+          if ! awk -v exception="imagemd W: Dependency included, but may not be needed ('ffmpeg')" \
+            '$0 != exception && /(^|[[:space:]])[EW]:/ { found=1 } END { exit found }' \
+            "$RUNNER_TEMP/namcap.log"; then
+            exit 1
+          fi
+
+      - name: Install and remove the Arch package in a clean container
+        shell: sh
+        run: |
+          set -eu
+          docker run --rm \
+            --volume "$PWD/artifacts:/artifacts:ro" \
+            archlinux:base@sha256:204e91950fd364961088a01773eee9012243b7e965fed42b1d82d12416190782 \
+            sh -eu -c '
+              pacman --noconfirm -Sy ffmpeg
+              pacman --noconfirm -U /artifacts/arch/*.pkg.tar.zst
+              test -x /usr/bin/imagemd
+              pacman --noconfirm -R imagemd
+              test ! -e /usr/bin/imagemd
+            '
+
+      - name: Build and validate the reproducible AppImage bundle
+        shell: sh
+        run: |
+          set -eu
+          mkdir -p artifacts/appimage-runtime artifacts/tools
+          docker build \
+            --file packaging/container/Dockerfile.appimage-runtime \
+            --tag imagemd-appimage-runtime:ci \
+            --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
+            .
+          docker run --rm \
+            --volume "$PWD/artifacts:/artifacts" \
+            imagemd-appimage-runtime:ci \
+            sh -eu -c '
+              cp /opt/imagemd-runtime/bin/ffmpeg /artifacts/appimage-runtime/ffmpeg
+              cp /opt/imagemd-runtime/bin/ffprobe /artifacts/appimage-runtime/ffprobe
+            '
+          python packaging/appimage/build_appdir.py \
+            --stage artifacts/stage \
+            --appdir artifacts/appdir \
+            --ffmpeg artifacts/appimage-runtime/ffmpeg \
+            --ffprobe artifacts/appimage-runtime/ffprobe
+          curl --fail --location --silent --show-error \
+            --output artifacts/tools/appimagetool-x86_64.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          printf '%s  %s\n' \
+            ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0 \
+            artifacts/tools/appimagetool-x86_64.AppImage | sha256sum --check --strict
+          chmod +x artifacts/tools/appimagetool-x86_64.AppImage
+          curl --fail --location --silent --show-error \
+            --output artifacts/tools/runtime-x86_64 \
+            https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64
+          printf '%s  %s\n' \
+            2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d \
+            artifacts/tools/runtime-x86_64 | sha256sum --check --strict
+          chmod +x artifacts/tools/runtime-x86_64
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 \
+            artifacts/tools/appimagetool-x86_64.AppImage \
+            --runtime-file artifacts/tools/runtime-x86_64 \
+            artifacts/appdir artifacts/ImageMD-x86_64.AppImage
+          test -f artifacts/ImageMD-x86_64.AppImage
+          APPIMAGE_EXTRACT_AND_RUN=1 \
+            artifacts/ImageMD-x86_64.AppImage --appimage-offset
+          if APPIMAGE_EXTRACT_AND_RUN=1 timeout 10 xvfb-run -a \
+            artifacts/ImageMD-x86_64.AppImage; then
+            status=$?
+          else
+            status=$?
+          fi
+          if [ "$status" -ne 124 ]; then
+            exit 1
+          fi
+
+      - name: Build and validate the native Flatpak bundle
+        shell: sh
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder xvfb
+          sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak --user install --assumeyes flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
+          python packaging/flatpak/prepare_flatpak.py --stage artifacts/stage --output artifacts/flatpak-context
+          flatpak-builder --force-clean --repo artifacts/flatpak-repo --install-deps-from=flathub artifacts/flatpak-build artifacts/flatpak-context/org.roymejia.ImageMD.yml
+          flatpak build-bundle artifacts/flatpak-repo artifacts/ImageMD.flatpak org.roymejia.ImageMD
+          flatpak --user install --assumeyes artifacts/ImageMD.flatpak
+          flatpak run --command=sh org.roymejia.ImageMD -c 'test -x /app/bin/ffmpeg && test -x /app/bin/ffprobe'
+          if timeout 10 xvfb-run -a flatpak run org.roymejia.ImageMD; then
+            status=$?
+          else
+            status=$?
+          fi
+          if [ "$status" -ne 124 ]; then
+            exit 1
+          fi
+
+      - name: Stage release artifacts and generate checksums
+        shell: sh
+        run: |
+          set -eu
+          mkdir -p artifacts/release
+          cp artifacts/imagemd.deb artifacts/release/
+          cp artifacts/rpm/*.x86_64.rpm artifacts/release/
+          cp artifacts/arch/*.pkg.tar.zst artifacts/release/
+          cp artifacts/ImageMD-x86_64.AppImage artifacts/release/
+          cp artifacts/ImageMD.flatpak artifacts/release/
+          test "$(find artifacts/release -maxdepth 1 -type f \( \
+            -name '*.deb' -o \
+            -name '*.rpm' -o \
+            -name '*.pkg.tar.zst' -o \
+            -name '*.AppImage' -o \
+            -name '*.flatpak' \
+          \) | wc -l)" -eq 5
+          cp artifacts/stage/release-metadata.json artifacts/release/ImageMD-release-metadata.json
+          mkdir -p artifacts/tools
+          curl --fail --location --silent --show-error \
+            --output artifacts/tools/syft_1.51.1_linux_amd64.tar.gz \
+            https://github.com/anchore/syft/releases/download/v1.51.1/syft_1.51.1_linux_amd64.tar.gz
+          printf '%s  %s\n' \
+            8fcb33017a0dc1058298c923c436d19dfa68ae93968e0b423248542e3afb9fc3 \
+            artifacts/tools/syft_1.51.1_linux_amd64.tar.gz | sha256sum --check --strict
+          tar -xzf artifacts/tools/syft_1.51.1_linux_amd64.tar.gz --directory artifacts/tools
+          chmod +x artifacts/tools/syft
+          artifacts/tools/syft dir:artifacts/release --output spdx-json=artifacts/release/ImageMD.spdx.json
+          python packaging/write_checksums.py --artifacts artifacts/release --output artifacts/release/SHA256SUMS
+          test -f artifacts/release/SHA256SUMS
+
+      - name: Attest release artifacts provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d
+        with:
+          subject-path: artifacts/release/*
+
+      - name: Attest release artifacts SBOM
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d
+        with:
+          subject-path: artifacts/release/*
+          sbom-path: artifacts/release/ImageMD.spdx.json
+
+      - name: Upload release candidate artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: imagemd-release-candidate
+          path: artifacts/release
+          if-no-files-found: error
+          retention-days: 14

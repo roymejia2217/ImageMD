@@ -1,0 +1,39 @@
+Name:           imagemd
+%global debug_package %{nil}
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Desktop metadata analysis and repair tool
+License:        MIT
+URL:            https://github.com/roymejia2217/ImageMD
+Source0:        imagemd-stage.tar.gz
+BuildArch:      x86_64
+BuildRequires:  desktop-file-utils
+Requires:       ffmpeg-free
+Requires:       glibc >= 2.36
+
+%description
+ImageMD analyzes image and video timestamps and applies approved repairs.
+
+%prep
+%setup -q -c -T
+tar -xzf %{SOURCE0}
+
+%install
+install -d %{buildroot}
+cp -a rootfs/. %{buildroot}/
+rm -f %{buildroot}%{_datadir}/doc/imagemd/copyright
+
+%check
+desktop-file-validate %{buildroot}%{_datadir}/applications/org.roymejia.ImageMD.desktop
+
+%files
+%license /usr/share/licenses/imagemd/LICENSE
+%{_bindir}/imagemd
+%{_datadir}/applications/org.roymejia.ImageMD.desktop
+%{_datadir}/icons/hicolor/scalable/apps/org.roymejia.ImageMD.svg
+%{_metainfodir}/org.roymejia.ImageMD.metainfo.xml
+%{_mandir}/man1/imagemd.1*
+
+%changelog
+* Mon Sep 14 2026 Roy Mejia <roymejia2217@users.noreply.github.com> - @VERSION@-1
+- Initial ImageMD Linux package

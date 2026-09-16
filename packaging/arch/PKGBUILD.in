@@ -1,0 +1,17 @@
+# Maintainer: Roy Mejia <roymejia2217@users.noreply.github.com>
+pkgname=imagemd
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Desktop metadata analysis and repair tool'
+arch=('x86_64')
+url='https://github.com/roymejia2217/ImageMD'
+license=('MIT')
+options=('!debug')
+depends=('ffmpeg' 'glibc>=2.36' 'zlib' 'hicolor-icon-theme')
+source=("${pkgname}-${pkgver}.tar.gz")
+sha256sums=('@SHA256@')
+
+package() {
+  install -d "${pkgdir}"
+  cp -a "${srcdir}/rootfs/." "${pkgdir}/"
+}

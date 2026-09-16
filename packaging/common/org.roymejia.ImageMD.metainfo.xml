@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.roymejia.ImageMD</id>
+  <name>ImageMD</name>
+  <summary>Analyze and repair image and video metadata</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <launchable type="desktop-id">org.roymejia.ImageMD.desktop</launchable>
+  <provides>
+    <binary>imagemd</binary>
+  </provides>
+  <description>
+    <p>Desktop tool for reviewing and repairing timestamps in supported image and video files.</p>
+  </description>
+  <developer id="org.roymejia">
+    <name>Roy Mejia</name>
+  </developer>
+  <url type="homepage">https://github.com/roymejia2217/ImageMD</url>
+  <url type="bugtracker">https://github.com/roymejia2217/ImageMD/issues</url>
+  <content_rating type="oars-1.1"/>
+</component>

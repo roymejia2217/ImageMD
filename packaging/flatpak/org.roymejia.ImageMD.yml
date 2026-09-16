@@ -1,0 +1,41 @@
+id: org.roymejia.ImageMD
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: imagemd
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --device=dri
+  # Tk's native chooser cannot yet use an xdg-desktop-portal adapter.  The
+  # application operates on user-selected files, so home access is explicit
+  # until that adapter is delivered and acceptance-tested.
+  - --filesystem=home
+build-options:
+  env:
+    IMAGEMD_FFMPEG_EXECUTABLE: /app/bin/ffmpeg
+    IMAGEMD_FFPROBE_EXECUTABLE: /app/bin/ffprobe
+modules:
+  - name: ffmpeg
+    buildsystem: simple
+    build-commands:
+      - ./configure --prefix=/app --disable-debug --disable-doc --disable-static --enable-shared --enable-ffmpeg --enable-ffprobe --disable-network
+      - make -j"${FLATPAK_BUILDER_N_JOBS}"
+      - make install
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz
+        sha256: 733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1
+  - name: imagemd
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 usr/bin/imagemd /app/bin/imagemd
+      - install -Dm644 usr/share/applications/org.roymejia.ImageMD.desktop /app/share/applications/org.roymejia.ImageMD.desktop
+      - install -Dm644 usr/share/icons/hicolor/scalable/apps/org.roymejia.ImageMD.svg /app/share/icons/hicolor/scalable/apps/org.roymejia.ImageMD.svg
+      - install -Dm644 usr/share/metainfo/org.roymejia.ImageMD.metainfo.xml /app/share/metainfo/org.roymejia.ImageMD.metainfo.xml
+      - install -Dm644 usr/share/licenses/imagemd/LICENSE /app/share/licenses/imagemd/LICENSE
+      - install -Dm644 usr/share/man/man1/imagemd.1 /app/share/man/man1/imagemd.1
+    sources:
+      - type: dir
+        path: payload

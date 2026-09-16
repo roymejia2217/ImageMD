@@ -1,0 +1,18 @@
+.TH IMAGEMD 1 "September 2026" "ImageMD" "User Commands"
+.SH NAME
+imagemd \- analyze and repair supported image and video metadata
+.SH SYNOPSIS
+.B imagemd
+.SH DESCRIPTION
+.B ImageMD
+opens the graphical application for reviewing timestamp candidates and applying
+only approved metadata changes. Image metadata repairs preserve a backup beside
+the original file. Video repair requires the system FFmpeg executable.
+.SH FILES
+.TP
+.I file.bak
+Backup created before a successful metadata or PNG repair commit.
+.SH EXIT STATUS
+The graphical launcher remains active until its window is closed.
+.SH BUGS
+Report issues at https://github.com/roymejia2217/ImageMD/issues.

@@ -71,3 +71,5 @@ El ejecutable resultante (`ImageMD.exe`) se generará en la carpeta `dist/`
 
 ### Releases
 Para uso inmediato sin configuración de entorno, descargue el ejecutable precompilado más reciente desde la sección de [**Releases**](https://github.com/roymejia2217/ImageMD/releases/latest) de este repositorio.
+
+Las distribuciones Linux planificadas para la release 1.1 son paquetes DEB, RPM, Flatpak, AppImage y Arch. Cada formato se publicará únicamente después de superar sus validaciones de instalación, ejecución y compatibilidad correspondientes.

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ImageMD
+Comment=Analyze and repair image and video metadata
+Exec=imagemd
+Icon=org.roymejia.ImageMD
+Terminal=false
+Categories=Graphics;
+MimeType=image/jpeg;image/png;image/tiff;image/webp;video/mp4;video/quicktime;video/x-matroska;video/x-msvideo;
+StartupNotify=true

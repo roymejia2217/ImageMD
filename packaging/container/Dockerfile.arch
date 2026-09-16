@@ -1,0 +1,8 @@
+FROM archlinux:base@sha256:204e91950fd364961088a01773eee9012243b7e965fed42b1d82d12416190782
+
+RUN pacman --noconfirm -Syu base-devel namcap ffmpeg ttf-dejavu xorg-server-xvfb \
+    && useradd --create-home builder \
+    && pacman -Scc --noconfirm
+
+USER builder
+WORKDIR /workspace

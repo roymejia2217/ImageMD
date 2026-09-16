@@ -1,0 +1,32 @@
+FROM debian@sha256:6ebd97fa83deb272194a2cf015b3d26a4d538e9ad3a7a79d544c8af5b0a01443
+ARG SOURCE_DATE_EPOCH
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        nasm \
+        pkg-config \
+        xz-utils \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl --fail --location --silent --show-error \
+        --output /tmp/ffmpeg-7.1.1.tar.xz \
+        https://ffmpeg.org/releases/ffmpeg-7.1.1.tar.xz \
+    && echo "733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1  /tmp/ffmpeg-7.1.1.tar.xz" | sha256sum --check --strict \
+    && mkdir -p /tmp/ffmpeg \
+    && \
+    tar -xJf /tmp/ffmpeg-7.1.1.tar.xz --strip-components=1 -C /tmp/ffmpeg \
+    && cd /tmp/ffmpeg \
+    && ./configure \
+        --prefix=/opt/imagemd-runtime \
+        --disable-shared \
+        --enable-static \
+        --disable-network \
+        --disable-ffplay \
+    && make -j"$(nproc)" \
+    && make install \
+    && test -x /opt/imagemd-runtime/bin/ffmpeg \
+    && test -x /opt/imagemd-runtime/bin/ffprobe \
+    && rm -rf /tmp/ffmpeg /tmp/ffmpeg-7.1.1.tar.xz
