@@ -13,8 +13,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test-and-build:
-    name: Python 3.12 test and wheel build
+  quality:
+    name: Quality and tests
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -55,3 +55,16 @@ jobs:
 
       - name: Build the distributable wheel
         run: uv build --wheel
+
+  required-ci:
+    name: Required CI
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    if: ${{ always() }}
+    steps:
+      - name: Require quality success
+        run: |
+          test "${{ needs.quality.result }}" = "success"
