@@ -70,6 +70,18 @@ ImageMD commit types is an ImageMD-specific policy. It prevents a
 changed post-release repository state from retaining the exact identity
 of an already-published release.
 
+During a GitHub `pull_request` verification run, the checked-out
+worktree is the synthetic merge result used to test integration with
+the target branch. That synthetic merge commit is CI infrastructure,
+not authored change intent, and therefore does not participate in
+Conventional Commit version classification.
+
+Pull-request version derivation uses the immutable `base.sha` and
+`head.sha` values from the GitHub event payload as the semantic history
+tips. The merged worktree is still tested normally. This preserves both
+integration testing and authored-history SemVer classification without
+weakening Conventional Commit grammar.
+
 ## Published release identity
 
 A release tag must have the form `vMAJOR.MINOR.PATCH` and its version
