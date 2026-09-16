@@ -1,8 +1,11 @@
+import json
 import os
 import re
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +62,72 @@ def _project_version() -> str:
     return matches[0]
 
 
+def _github_event_payload() -> dict[str, object]:
+    event_path = os.environ.get("GITHUB_EVENT_PATH", "")
+
+    if not event_path:
+        raise AssertionError(
+            "GITHUB_EVENT_PATH is required for pull_request version governance"
+        )
+
+    try:
+        payload = json.loads(Path(event_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AssertionError(
+            "unable to read GitHub pull_request event payload"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise AssertionError("GitHub event payload must be a JSON object")
+
+    return payload
+
+
+def _pull_request_sha(
+    payload: dict[str, object],
+    side: str,
+) -> str:
+    if side not in {"base", "head"}:
+        raise AssertionError(f"invalid pull request side: {side!r}")
+
+    try:
+        pull_request = payload["pull_request"]
+        side_payload = pull_request[side]
+        value = side_payload["sha"]
+    except (KeyError, TypeError) as exc:
+        raise AssertionError(
+            f"GitHub event payload is missing pull_request.{side}.sha"
+        ) from exc
+
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise AssertionError(
+            f"pull_request.{side}.sha is not a 40-character lowercase Git SHA"
+        )
+
+    _git(
+        "cat-file",
+        "-e",
+        f"{value}^{{commit}}",
+    )
+
+    return value
+
+
+def _semantic_history_tips() -> tuple[str, ...]:
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return ("HEAD",)
+
+    if os.environ.get("GITHUB_EVENT_NAME", "") != "pull_request":
+        return ("HEAD",)
+
+    payload = _github_event_payload()
+
+    return (
+        _pull_request_sha(payload, "base"),
+        _pull_request_sha(payload, "head"),
+    )
+
+
 def _reachable_release_tags() -> list[tuple[tuple[int, int, int], str]]:
     tags: list[tuple[tuple[int, int, int], str]] = []
 
@@ -88,11 +157,15 @@ def _reachable_release_tags() -> list[tuple[tuple[int, int, int], str]]:
 
 
 def _commit_subjects(base_tag: str) -> list[str]:
+    history_tips = _semantic_history_tips()
+
     output = _git(
         "log",
         "--format=%s",
-        f"{base_tag}..HEAD",
+        f"^{base_tag}",
+        *history_tips,
     )
+
     return output.splitlines() if output else []
 
 
@@ -156,6 +229,178 @@ def _history_contract_is_required() -> bool:
 
 
 class VersionContractTests(unittest.TestCase):
+    def test_pull_request_history_uses_authored_base_and_head(self):
+        base_sha = "1" * 40
+        head_sha = "2" * 40
+
+        payload = {
+            "pull_request": {
+                "base": {"sha": base_sha},
+                "head": {"sha": head_sha},
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            event_path.write_text(
+                json.dumps(payload),
+                encoding="utf-8",
+            )
+
+            environment = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_EVENT_NAME": "pull_request",
+                "GITHUB_EVENT_PATH": str(event_path),
+            }
+
+            with patch.dict(
+                os.environ,
+                environment,
+                clear=False,
+            ):
+                with patch(
+                    f"{__name__}._git",
+                    return_value="fix(release): example",
+                ) as git:
+                    subjects = _commit_subjects("v1.1.1")
+
+        calls = [entry.args for entry in git.call_args_list]
+
+        self.assertEqual(
+            subjects,
+            ["fix(release): example"],
+        )
+        self.assertIn(
+            (
+                "log",
+                "--format=%s",
+                "^v1.1.1",
+                base_sha,
+                head_sha,
+            ),
+            calls,
+        )
+        self.assertNotIn(
+            (
+                "log",
+                "--format=%s",
+                "v1.1.1..HEAD",
+            ),
+            calls,
+        )
+
+    def test_pull_request_history_requires_event_path(self):
+        environment = {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "pull_request",
+            "GITHUB_EVENT_PATH": "",
+        }
+
+        with patch.dict(
+            os.environ,
+            environment,
+            clear=False,
+        ):
+            with self.assertRaisesRegex(
+                AssertionError,
+                "GITHUB_EVENT_PATH",
+            ):
+                _commit_subjects("v1.1.1")
+
+    def test_pull_request_history_rejects_malformed_sha(self):
+        payload = {
+            "pull_request": {
+                "base": {"sha": "1" * 40},
+                "head": {"sha": "not-a-sha"},
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            event_path = Path(directory) / "event.json"
+            event_path.write_text(
+                json.dumps(payload),
+                encoding="utf-8",
+            )
+
+            environment = {
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_EVENT_NAME": "pull_request",
+                "GITHUB_EVENT_PATH": str(event_path),
+            }
+
+            with patch.dict(
+                os.environ,
+                environment,
+                clear=False,
+            ):
+                with patch(
+                    f"{__name__}._git",
+                    return_value="",
+                ):
+                    with self.assertRaisesRegex(
+                        AssertionError,
+                        "head.sha",
+                    ):
+                        _commit_subjects("v1.1.1")
+
+    def test_push_history_uses_head(self):
+        environment = {
+            "GITHUB_ACTIONS": "true",
+            "GITHUB_EVENT_NAME": "push",
+        }
+
+        with patch.dict(
+            os.environ,
+            environment,
+            clear=False,
+        ):
+            with patch(
+                f"{__name__}._git",
+                return_value="fix(release): example",
+            ) as git:
+                subjects = _commit_subjects("v1.1.1")
+
+        self.assertEqual(
+            subjects,
+            ["fix(release): example"],
+        )
+
+        git.assert_called_once_with(
+            "log",
+            "--format=%s",
+            "^v1.1.1",
+            "HEAD",
+        )
+
+    def test_local_history_uses_head(self):
+        environment = {
+            "GITHUB_ACTIONS": "false",
+            "GITHUB_EVENT_NAME": "",
+        }
+
+        with patch.dict(
+            os.environ,
+            environment,
+            clear=False,
+        ):
+            with patch(
+                f"{__name__}._git",
+                return_value="fix(release): example",
+            ) as git:
+                subjects = _commit_subjects("v1.1.1")
+
+        self.assertEqual(
+            subjects,
+            ["fix(release): example"],
+        )
+
+        git.assert_called_once_with(
+            "log",
+            "--format=%s",
+            "^v1.1.1",
+            "HEAD",
+        )
+
     def test_project_version_is_strict_stable_semver(self):
         version = _project_version()
 
