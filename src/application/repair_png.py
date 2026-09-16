@@ -5,27 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Protocol
 
-from src.adapters.storage_transaction import (
+from src.application.ports import (
     CommitReceipt,
     ErrorCode,
-    commit_staged_file,
-    create_staging_file,
-    snapshot_file,
+    PngValidator,
+    PngWriteKind,
+    PngWriter,
+    StorageTransactionPort,
 )
-from src.adapters.png_validation import PillowPngValidator
-from src.repair import ImageRepairTool, PngWriteKind, PngWriteResult
-
-
-class PngWriter(Protocol):
-    def write_repaired_png(
-        self, source_path: str, staged_path: str
-    ) -> PngWriteResult: ...
-
-
-class PngValidator(Protocol):
-    def is_valid(self, staged_path: str) -> bool: ...
 
 
 class RepairKind(str, Enum):
@@ -62,26 +50,28 @@ class PngRepairService:
 
     def __init__(
         self,
-        writer: PngWriter | None = None,
-        policy: RepairPolicy | None = None,
-        validator: PngValidator | None = None,
+        writer: PngWriter,
+        policy: RepairPolicy,
+        validator: PngValidator,
+        storage: StorageTransactionPort,
     ) -> None:
         if policy is None:
             raise ValueError("an explicit backup suffix policy is required")
-        self._writer = writer or ImageRepairTool()
+        self._writer = writer
         self._policy = policy
-        self._validator = validator or PillowPngValidator()
+        self._validator = validator
+        self._storage = storage
 
     def repair(self, source_path: str) -> RepairResult:
         source = Path(source_path)
         if source.suffix.lower() != ".png":
             return RepairResult(RepairKind.REJECTED)
-        snapshot = snapshot_file(source_path)
+        snapshot = self._storage.snapshot_file(source_path)
         if not snapshot.succeeded or snapshot.value is None:
             return RepairResult(
                 RepairKind.STAGING_FAILED, transaction_error=snapshot.error
             )
-        staged_result = create_staging_file(snapshot.value)
+        staged_result = self._storage.create_staging_file(snapshot.value)
         if not staged_result.succeeded or staged_result.value is None:
             return RepairResult(
                 RepairKind.STAGING_FAILED, transaction_error=staged_result.error
@@ -93,10 +83,10 @@ class PngRepairService:
                 str(staged.source.path), str(staged.path)
             )
         except Exception:
-            staged.path.unlink(missing_ok=True)
+            self._storage.discard_staged_file(staged)
             return RepairResult(RepairKind.WRITE_FAILED)
         if not write_result.succeeded:
-            staged.path.unlink(missing_ok=True)
+            self._storage.discard_staged_file(staged)
             kind = (
                 RepairKind.REJECTED
                 if write_result.kind is PngWriteKind.NOT_REPAIRABLE
@@ -110,17 +100,19 @@ class PngRepairService:
         except Exception:
             valid_stage = False
         if not valid_stage:
-            staged.path.unlink(missing_ok=True)
+            self._storage.discard_staged_file(staged)
             return RepairResult(RepairKind.VALIDATION_FAILED)
 
-        staged_snapshot = snapshot_file(staged.path)
+        staged_snapshot = self._storage.snapshot_file(staged.path)
         if not staged_snapshot.succeeded or staged_snapshot.value is None:
-            staged.path.unlink(missing_ok=True)
+            self._storage.discard_staged_file(staged)
             return RepairResult(
                 RepairKind.COMMIT_FAILED, transaction_error=staged_snapshot.error
             )
         backup = Path(f"{staged.source.path}{self._policy.backup_suffix}")
-        committed = commit_staged_file(staged, staged_snapshot.value.sha256, backup)
+        committed = self._storage.commit_staged_file(
+            staged, staged_snapshot.value.sha256, backup
+        )
         if not committed.succeeded:
             return RepairResult(
                 RepairKind.COMMIT_FAILED, transaction_error=committed.error

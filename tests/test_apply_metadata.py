@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from zoneinfo import ZoneInfo
 
+from src.adapters import storage_transaction
 from src.application.apply_metadata import ApplyKind, ApplyPolicy, MetadataApplyService
 from src.application.date_decision import DateDecision, DecisionKind, TemporalPolicy
 from src.domain.temporal import DateCandidate, DateSource
@@ -36,7 +37,7 @@ class TestMetadataApplyService(unittest.TestCase):
         source = Path(self.temp.name) / "photo.jpg"
         source.write_bytes(b"original")
         writer = WriterStub()
-        result = MetadataApplyService(writer, self.policy).apply(
+        result = MetadataApplyService(writer, self.policy, storage_transaction).apply(
             str(source), self.decision(datetime(2026, 1, 2, 3, 4, 5))
         )
         self.assertEqual(result.kind, ApplyKind.APPLIED)
@@ -49,7 +50,7 @@ class TestMetadataApplyService(unittest.TestCase):
         source = Path(self.temp.name) / "photo.jpg"
         source.write_bytes(b"original")
         writer = WriterStub()
-        result = MetadataApplyService(writer, self.policy).apply(
+        result = MetadataApplyService(writer, self.policy, storage_transaction).apply(
             str(source), DateDecision(DecisionKind.REQUIRE_REVIEW, None, "review")
         )
         self.assertEqual(result.kind, ApplyKind.REJECTED)
@@ -59,9 +60,9 @@ class TestMetadataApplyService(unittest.TestCase):
     def test_writer_failure_preserves_source_and_removes_stage(self):
         source = Path(self.temp.name) / "photo.jpg"
         source.write_bytes(b"original")
-        result = MetadataApplyService(WriterStub(False), self.policy).apply(
-            str(source), self.decision(datetime(2026, 1, 2))
-        )
+        result = MetadataApplyService(
+            WriterStub(False), self.policy, storage_transaction
+        ).apply(str(source), self.decision(datetime(2026, 1, 2)))
         self.assertEqual(result.kind, ApplyKind.WRITE_FAILED)
         self.assertEqual(source.read_bytes(), b"original")
         self.assertEqual(list(Path(self.temp.name).glob("*.stage*")), [])
@@ -70,7 +71,7 @@ class TestMetadataApplyService(unittest.TestCase):
         source = Path(self.temp.name) / "clip.mov"
         source.write_bytes(b"original")
         writer = WriterStub()
-        result = MetadataApplyService(writer, self.policy).apply(
+        result = MetadataApplyService(writer, self.policy, storage_transaction).apply(
             str(source), self.decision(datetime(2026, 1, 2, 12, 0, 0))
         )
         self.assertEqual(result.kind, ApplyKind.APPLIED)

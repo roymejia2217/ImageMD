@@ -6,23 +6,15 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Protocol
 
-from src.adapters.storage_transaction import (
+from src.application.date_decision import DateDecision, DecisionKind, TemporalPolicy
+from src.application.ports import (
     CommitReceipt,
     ErrorCode,
-    commit_staged_file,
-    create_staging_file,
-    snapshot_file,
+    StagedMetadataWriter,
+    StorageTransactionPort,
 )
-from src.application.date_decision import DateDecision, DecisionKind, TemporalPolicy
 from src.domain.temporal import DateCandidate
-
-
-class StagedMetadataWriter(Protocol):
-    def write_metadata_to_stage(
-        self, source_path: str, staged_path: str, new_date: datetime
-    ) -> bool: ...
 
 
 class ApplyKind(str, Enum):
@@ -57,19 +49,25 @@ class ApplyResult:
 class MetadataApplyService:
     """Bridge an approved plan to the staged storage transaction."""
 
-    def __init__(self, writer: StagedMetadataWriter, policy: ApplyPolicy) -> None:
+    def __init__(
+        self,
+        writer: StagedMetadataWriter,
+        policy: ApplyPolicy,
+        storage: StorageTransactionPort,
+    ) -> None:
         self._writer = writer
         self._policy = policy
+        self._storage = storage
 
     def apply(self, source_path: str, decision: DateDecision) -> ApplyResult:
         if decision.kind is not DecisionKind.PROPOSE_UPDATE or decision.target is None:
             return ApplyResult(ApplyKind.REJECTED)
-        snapshot_result = snapshot_file(source_path)
+        snapshot_result = self._storage.snapshot_file(source_path)
         if not snapshot_result.succeeded or snapshot_result.value is None:
             return ApplyResult(
                 ApplyKind.STAGING_FAILED, transaction_error=snapshot_result.error
             )
-        staged_result = create_staging_file(snapshot_result.value)
+        staged_result = self._storage.create_staging_file(snapshot_result.value)
         if not staged_result.succeeded or staged_result.value is None:
             return ApplyResult(
                 ApplyKind.STAGING_FAILED, transaction_error=staged_result.error
@@ -79,16 +77,18 @@ class MetadataApplyService:
         if target is None or not self._writer.write_metadata_to_stage(
             str(staged.source.path), str(staged.path), target
         ):
-            staged.path.unlink(missing_ok=True)
+            self._storage.discard_staged_file(staged)
             return ApplyResult(ApplyKind.WRITE_FAILED)
-        staged_snapshot = snapshot_file(staged.path)
+        staged_snapshot = self._storage.snapshot_file(staged.path)
         if not staged_snapshot.succeeded or staged_snapshot.value is None:
-            staged.path.unlink(missing_ok=True)
+            self._storage.discard_staged_file(staged)
             return ApplyResult(
                 ApplyKind.COMMIT_FAILED, transaction_error=staged_snapshot.error
             )
         backup = Path(f"{staged.source.path}{self._policy.backup_suffix}")
-        committed = commit_staged_file(staged, staged_snapshot.value.sha256, backup)
+        committed = self._storage.commit_staged_file(
+            staged, staged_snapshot.value.sha256, backup
+        )
         if not committed.succeeded:
             return ApplyResult(
                 ApplyKind.COMMIT_FAILED, transaction_error=committed.error
