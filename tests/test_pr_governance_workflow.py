@@ -32,6 +32,9 @@ class PrGovernanceWorkflowTests(unittest.TestCase):
     def test_checkout_uses_trusted_base_sha(self):
         self.assertIn("ref: ${{ github.event.pull_request.base.sha }}", self.workflow)
 
+    def test_checkout_does_not_persist_credentials(self):
+        self.assertRegex(self.workflow, r"(?m)^\s+persist-credentials:\s*false\s*$")
+
     def test_head_checkout_is_forbidden(self):
         self.assertNotIn("github.event.pull_request.head.sha", self.workflow)
         self.assertNotIn("github.head_ref", self.workflow)

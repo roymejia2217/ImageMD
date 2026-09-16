@@ -139,5 +139,69 @@ class QualityWorkflowContractTests(unittest.TestCase):
         self.assertRegex(self.workflow, r"(?m)^permissions:\n  contents: read\s*$")
 
 
+class CommitGovernanceWorkflowContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text(
+            encoding="utf-8"
+        )
+
+    def test_checkout_has_full_history_for_commit_range(self):
+        self.assertRegex(self.workflow, r"(?m)^\s+fetch-depth:\s*0\s*$")
+
+    def test_checkout_does_not_persist_credentials(self):
+        self.assertRegex(self.workflow, r"(?m)^\s+persist-credentials:\s*false\s*$")
+
+    def test_commit_governance_step_is_pull_request_only(self):
+        self.assertIn("Validate pull request commit subjects", self.workflow)
+        match = re.search(
+            r"(?ms)^\s*-\s*name:\s*Validate pull request commit subjects\s*\n"
+            r"(?:[ ]+.*\n)*?\s+if:\s*(.+)\s*$",
+            self.workflow,
+        )
+        # Fallback: locate the step block and inspect its condition.
+        if match is None:
+            step_index = self.workflow.index("Validate pull request commit subjects")
+            window = self.workflow[max(0, step_index - 600) : step_index + 600]
+            self.assertIn("github.event_name == 'pull_request'", window)
+        else:
+            self.assertIn("github.event_name == 'pull_request'", match.group(1))
+
+    def test_commit_range_shas_come_from_event_env_values(self):
+        self.assertIn("github.event.pull_request.base.sha", self.workflow)
+        self.assertIn("github.event.pull_request.head.sha", self.workflow)
+        self.assertIn("PR_BASE_SHA", self.workflow)
+        self.assertIn("PR_HEAD_SHA", self.workflow)
+
+    def test_commit_validator_invocation_is_exact(self):
+        self.assertIn("python -m ci.governance commits", self.workflow)
+        self.assertIn('--base "$PR_BASE_SHA"', self.workflow)
+        self.assertIn('--head "$PR_HEAD_SHA"', self.workflow)
+        step_index = self.workflow.index("Validate pull request commit subjects")
+        run_index = self.workflow.index("python -m ci.governance commits")
+        self.assertGreater(run_index, step_index)
+        run_line = self.workflow[run_index : run_index + 200]
+        self.assertNotIn("github.event.pull_request", run_line)
+
+    def test_commit_governance_runs_before_dependency_installation(self):
+        self.assertIn(
+            "Validate pull request commit subjects",
+            self.workflow,
+            "verify.yml must define the commit-subjects governance step",
+        )
+        step_index = self.workflow.index("Validate pull request commit subjects")
+        sync_index = self.workflow.index("run: uv sync --locked")
+        self.assertLess(step_index, sync_index)
+
+    def test_required_ci_remains_stable(self):
+        self.assertRegex(self.workflow, r"(?m)^  required-ci:\s*$")
+        self.assertIn("name: Required CI", self.workflow)
+        self.assertIn("needs.quality.result", self.workflow)
+
+    def test_push_to_main_behavior_remains_available(self):
+        self.assertRegex(self.workflow, r"(?m)^  push:\s*$")
+        self.assertIn("branches: [main]", self.workflow)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -127,6 +128,60 @@ def run_pr(title: str, body_file: str) -> int:
     return 2 if errors else 0
 
 
+SHA_PATTERN = re.compile(r"[0-9a-fA-F]{40}")
+
+
+def validate_commit_subjects(subjects: list[str]) -> list[str]:
+    """Validate every commit subject; empty means all subjects are valid."""
+    errors: list[str] = []
+    for index, subject in enumerate(subjects):
+        for violation in validate_subject(subject):
+            errors.append(
+                f"commit {index + 1} (index {index}) {subject!r}: {violation}"
+            )
+    return errors
+
+
+def run_commits(base: str, head: str) -> int:
+    """Validate the commit-subject range ``base..head``; 0 means valid."""
+    if SHA_PATTERN.fullmatch(base) is None:
+        print(f"error: invalid base SHA: {base!r}", file=sys.stderr)
+        return 2
+    if SHA_PATTERN.fullmatch(head) is None:
+        print(f"error: invalid head SHA: {head!r}", file=sys.stderr)
+        return 2
+    try:
+        completed = subprocess.run(
+            ["git", "log", "--format=%s", f"{base}..{head}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        print(f"error: git log failed for commit range: {exc}", file=sys.stderr)
+        return 2
+    if completed.returncode != 0:
+        detail = (completed.stderr or "").strip()
+        print(
+            f"error: git log failed for commit range {base}..{head}",
+            file=sys.stderr,
+        )
+        if detail:
+            print(f"error: {detail}", file=sys.stderr)
+        return 2
+    subjects = (completed.stdout or "").splitlines()
+    if not subjects:
+        print(
+            f"error: no commits found in range {base}..{head}",
+            file=sys.stderr,
+        )
+        return 2
+    errors = validate_commit_subjects(subjects)
+    for error in errors:
+        print(f"error: {error}", file=sys.stderr)
+    return 2 if errors else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point for ``python -m ci.governance``."""
     parser = argparse.ArgumentParser(prog="ci.governance")
@@ -134,9 +189,14 @@ def main(argv: list[str] | None = None) -> int:
     pr_parser = subparsers.add_parser("pr")
     pr_parser.add_argument("--title", required=True)
     pr_parser.add_argument("--body-file", required=True)
+    commits_parser = subparsers.add_parser("commits")
+    commits_parser.add_argument("--base", required=True)
+    commits_parser.add_argument("--head", required=True)
     args = parser.parse_args(argv)
     if args.command == "pr":
         return run_pr(args.title, args.body_file)
+    if args.command == "commits":
+        return run_commits(args.base, args.head)
     parser.error(f"unknown command: {args.command}")
     return 2
 
