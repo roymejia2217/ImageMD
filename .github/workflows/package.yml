@@ -138,9 +138,8 @@ jobs:
           ref: ${{ env.PACKAGE_REF }}
 
       - name: Download immutable package stage
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: ./.github/actions/download-package-stage
         with:
-          name: imagemd-package-stage
           path: artifacts/stage
 
       - name: Build and inspect the Debian package
@@ -177,9 +176,8 @@ jobs:
           ref: ${{ env.PACKAGE_REF }}
 
       - name: Download immutable package stage
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: ./.github/actions/download-package-stage
         with:
-          name: imagemd-package-stage
           path: artifacts/stage
 
       - name: Build and lint the RPM package
@@ -219,9 +217,8 @@ jobs:
           ref: ${{ env.PACKAGE_REF }}
 
       - name: Download immutable package stage
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: ./.github/actions/download-package-stage
         with:
-          name: imagemd-package-stage
           path: artifacts/stage
 
       - name: Build and lint the Arch package
@@ -264,9 +261,8 @@ jobs:
           ref: ${{ env.PACKAGE_REF }}
 
       - name: Download immutable package stage
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: ./.github/actions/download-package-stage
         with:
-          name: imagemd-package-stage
           path: artifacts/stage
 
       - name: Build and validate the AppImage
@@ -309,9 +305,8 @@ jobs:
           ref: ${{ env.PACKAGE_REF }}
 
       - name: Download immutable package stage
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: ./.github/actions/download-package-stage
         with:
-          name: imagemd-package-stage
           path: artifacts/stage
 
       - name: Build and validate the Flatpak bundle
@@ -325,7 +320,7 @@ jobs:
           flatpak --user install --assumeyes flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
           python packaging/flatpak/prepare_flatpak.py --stage artifacts/stage --output artifacts/flatpak-context
           flatpak-builder --user --force-clean --repo artifacts/flatpak-repo --install-deps-from=flathub artifacts/flatpak-build artifacts/flatpak-context/org.roymejia.ImageMD.yml
-          flatpak --user build-bundle artifacts/flatpak-repo artifacts/ImageMD.flatpak org.roymejia.ImageMD
+          flatpak build-bundle artifacts/flatpak-repo artifacts/ImageMD.flatpak org.roymejia.ImageMD
           flatpak --user install --assumeyes artifacts/ImageMD.flatpak
           flatpak --user run --command=sh org.roymejia.ImageMD -c 'test -x /app/bin/ffmpeg && test -x /app/bin/ffprobe'
           if timeout 10 xvfb-run -a flatpak --user run org.roymejia.ImageMD; then status=$?; else status=$?; fi

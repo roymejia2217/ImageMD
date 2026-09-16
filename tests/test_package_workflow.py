@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / ".github" / "workflows" / "package.yml"
+STAGE_ACTION = ROOT / ".github" / "actions" / "download-package-stage" / "action.yml"
 
 CHECKOUT_SHA = "11bd71901bbe5b1630ceea73d27597364c9af683"
 DOWNLOAD_SHA = "d3f86a106a0bac45b974a628896c90dbdf5c8093"
@@ -18,6 +19,7 @@ class PackageWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.workflow = PACKAGE.read_text(encoding="utf-8")
+        cls.stage_action = STAGE_ACTION.read_text(encoding="utf-8")
         cls.jobs = cls._job_sections(cls.workflow)
         cls.run_blocks = cls._run_blocks(cls.workflow)
 
@@ -102,14 +104,24 @@ class PackageWorkflowTests(unittest.TestCase):
         stage = self.jobs["bundle-stage"]
         self.assertIn("name: imagemd-package-stage", stage)
         self.assertNotRegex(stage, r"packaging/(?:debian|rpm|arch|appimage|flatpak)/")
+        self.assertIn(
+            f"uses: actions/download-artifact@{DOWNLOAD_SHA}", self.stage_action
+        )
+        self.assertIn("name: ${{ inputs.artifact-name }}", self.stage_action)
+        self.assertIn("path: ${{ inputs.path }}", self.stage_action)
+        self.assertIn(
+            'chmod 0755 "$stage_root/${{ inputs.executable-path }}"',
+            self.stage_action,
+        )
+        self.assertIn(
+            'test -x "$stage_root/${{ inputs.executable-path }}"', self.stage_action
+        )
         for job in PACKAGE_JOBS:
             section = self.jobs[job]
             self.assertIn(f"uses: actions/checkout@{CHECKOUT_SHA}", section)
             self.assertIn("ref: ${{ env.PACKAGE_REF }}", section)
-            self.assertIn(f"uses: actions/download-artifact@{DOWNLOAD_SHA}", section)
-            self.assertRegex(
-                section, r"name: imagemd-package-stage\s+path: artifacts/stage"
-            )
+            self.assertIn("uses: ./.github/actions/download-package-stage", section)
+            self.assertIn("path: artifacts/stage", section)
 
     def test_each_format_owns_only_its_named_output_and_builder(self):
         builders = {
@@ -150,10 +162,11 @@ class PackageWorkflowTests(unittest.TestCase):
             "flatpak --user update --appstream",
             "flatpak --user install",
             "flatpak-builder --user",
-            "flatpak --user build-bundle",
             "flatpak --user run",
         ):
             self.assertIn(fragment, section)
+        self.assertIn("flatpak build-bundle", section)
+        self.assertNotIn("flatpak --user build-bundle", section)
         self.assertNotRegex(section, r"sudo\s+flatpak")
         self.assertNotRegex(section, r"(?m)^\s*flatpak-builder\s+(?!--user\b)")
 
@@ -196,7 +209,10 @@ class PackageWorkflowTests(unittest.TestCase):
             "actions/upload-artifact": UPLOAD_SHA,
             "actions/attest": ATTEST_SHA,
         }
-        uses = re.findall(r"(?m)^\s+uses:\s+([^@\s]+)@([^\s#]+)", self.workflow)
+        uses = re.findall(
+            r"(?m)^\s+uses:\s+([^@\s]+)@([^\s#]+)",
+            f"{self.workflow}\n{self.stage_action}",
+        )
         self.assertTrue(uses)
         self.assertEqual({name for name, _ in uses}, set(expected))
         for name, sha in uses:

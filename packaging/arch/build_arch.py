@@ -51,9 +51,19 @@ def create_recipe(stage: Path, output: Path) -> Path:
     version = metadata["version"]
     if not isinstance(version, str):
         raise ValueError("stage metadata version must be text")
+    if output.is_symlink():
+        raise FileExistsError(f"refusing to use symlink recipe directory: {output}")
     if output.exists():
-        raise FileExistsError(f"refusing to overwrite recipe directory: {output}")
-    output.mkdir(parents=True)
+        if not output.is_dir():
+            raise FileExistsError(
+                f"refusing to use non-directory recipe path: {output}"
+            )
+        if any(output.iterdir()):
+            raise FileExistsError(
+                f"refusing to use non-empty recipe directory: {output}"
+            )
+    else:
+        output.mkdir(parents=True)
     package_version = arch_version(version)
     archive = output / f"imagemd-{package_version}.tar.gz"
     write_reproducible_tar_gz(stage / "rootfs", archive, "rootfs")
