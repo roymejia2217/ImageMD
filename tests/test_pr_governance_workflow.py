@@ -25,9 +25,19 @@ class PrGovernanceWorkflowTests(unittest.TestCase):
         self.assertIn("types: [opened, edited, reopened, synchronize]", self.workflow)
 
     def test_global_permissions_are_read_only(self):
-        self.assertRegex(self.workflow, r"(?m)^permissions:\n  contents: read\s*$")
+        self.assertRegex(
+            self.workflow,
+            r"(?m)^permissions:\n  contents: read\n  pull-requests: read\s*$",
+        )
         self.assertNotIn("contents: write", self.workflow)
         self.assertNotIn("secrets.", self.workflow)
+        for forbidden in (
+            "actions: write",
+            "checks: write",
+            "issues: write",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.workflow)
 
     def test_checkout_uses_trusted_base_sha(self):
         self.assertIn("ref: ${{ github.event.pull_request.base.sha }}", self.workflow)
@@ -54,8 +64,48 @@ class PrGovernanceWorkflowTests(unittest.TestCase):
         self.assertRegex(self.workflow, r"(?m)^\s+timeout-minutes:\s*10\s*$")
 
     def test_validator_runs_from_the_trusted_checkout(self):
-        self.assertIn("python -m ci.governance pr", self.workflow)
+        self.assertIn("python -m ci.governance trusted-pr", self.workflow)
         self.assertIn("--body-file", self.workflow)
+        self.assertIn("--commits-file", self.workflow)
+        self.assertIn("--files-file", self.workflow)
+        self.assertIn("$RUNNER_TEMP/pr-commits.json", self.workflow)
+        self.assertIn("$RUNNER_TEMP/pr-files.json", self.workflow)
+        self.assertIn("ref: ${{ github.event.pull_request.base.sha }}", self.workflow)
+
+    def test_commit_metadata_comes_from_github_api(self):
+        self.assertIn(
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits", self.workflow
+        )
+        self.assertIn("--paginate", self.workflow)
+        self.assertIn("--slurp", self.workflow)
+        self.assertIn("GH_TOKEN", self.workflow)
+        self.assertIn("github.token", self.workflow)
+        self.assertIn("PR_NUMBER", self.workflow)
+        self.assertIn("github.event.pull_request.number", self.workflow)
+
+    def test_changed_file_metadata_comes_from_github_api(self):
+        self.assertIn(
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files", self.workflow
+        )
+        self.assertIn("previous_filename", self.workflow)
+        self.assertIn("$RUNNER_TEMP/pr-files.json", self.workflow)
+
+    def test_pr_number_is_validated_before_use(self):
+        self.assertIn("set -euo pipefail", self.workflow)
+        self.assertIn("PR_NUMBER", self.workflow)
+        self.assertIn("[!0-9]", self.workflow)
+
+    def test_trusted_validation_uses_data_only(self):
+        self.assertIn('--title "$PR_TITLE"', self.workflow)
+        self.assertIn('--body-file "$RUNNER_TEMP/pr-body.md"', self.workflow)
+        self.assertIn('--commits-file "$RUNNER_TEMP/pr-commits.json"', self.workflow)
+        self.assertIn('--files-file "$RUNNER_TEMP/pr-files.json"', self.workflow)
+
+    def test_no_execution_of_head_code(self):
+        self.assertNotIn("github.event.pull_request.head.sha", self.workflow)
+        for forbidden in ("eval ", "exec ", "shell=True"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.workflow)
 
     def test_no_dependency_installation(self):
         self.assertNotIn("setup-uv", self.workflow)

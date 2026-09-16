@@ -8,6 +8,7 @@ PR metadata always enters as data (arguments and files), never as code.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -40,6 +41,200 @@ REQUIRED_HEADING_PATTERN = re.compile(r"##\s+(Summary|Verification|Release impac
 HTML_COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
 
 MAX_SUBJECT_LENGTH = 72
+
+PROTECTED_GOVERNANCE_PREFIXES = (
+    ".github/workflows/",
+    ".github/actions/",
+    "ci/",
+)
+
+PROTECTED_GOVERNANCE_PATHS = (
+    "tests/test_architecture_contract.py",
+    "tests/test_pr_governance.py",
+    "tests/test_pr_governance_workflow.py",
+    "tests/test_quality_workflow_contract.py",
+)
+
+
+def _is_protected_path(path: str) -> bool:
+    """Return True when a repository path belongs to the governance root."""
+    if path in PROTECTED_GOVERNANCE_PATHS:
+        return True
+    return any(path.startswith(prefix) for prefix in PROTECTED_GOVERNANCE_PREFIXES)
+
+
+def _validate_repo_path(value: object) -> str | None:
+    """Return an error string for an invalid repo path, else None."""
+    if not isinstance(value, str):
+        return f"invalid repository path: {value!r}"
+    if not value:
+        return "repository path must not be empty"
+    if value != value.strip():
+        return f"repository path must not have surrounding whitespace: {value!r}"
+    if value.startswith("/"):
+        return f"repository path must be relative: {value!r}"
+    parts = value.split("/")
+    if "" in parts:
+        return f"repository path must not contain empty segments: {value!r}"
+    if ".." in parts:
+        return f"repository path must not contain traversal: {value!r}"
+    if value.startswith("./"):
+        return f"repository path must be normalized: {value!r}"
+    return None
+
+
+def validate_governance_changes(records: object) -> list[str]:
+    """Validate changed-file records; empty means no governance violation."""
+    errors: list[str] = []
+    if not isinstance(records, list):
+        return ["changed-file records must be a list"]
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            errors.append(f"changed-file record {index + 1} must be an object")
+            continue
+        if "filename" not in record:
+            errors.append(f"changed-file record {index + 1} is missing filename")
+            continue
+        filename = record["filename"]
+        path_error = _validate_repo_path(filename)
+        if path_error is not None:
+            errors.append(f"changed-file record {index + 1}: {path_error}")
+            continue
+        previous = record.get("previous_filename")
+        if previous is not None:
+            previous_error = _validate_repo_path(previous)
+            if previous_error is not None:
+                errors.append(
+                    f"changed-file record {index + 1} previous_filename: "
+                    f"{previous_error}"
+                )
+                continue
+        candidates = [filename]
+        if isinstance(previous, str):
+            candidates.append(previous)
+        for candidate in candidates:
+            if _is_protected_path(candidate):
+                errors.append(f"governance-root path is protected: {candidate}")
+                break
+    return errors
+
+
+def _read_json_file(path: str) -> tuple[object | None, str | None]:
+    """Read a JSON file; return (data, error)."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        return None, f"cannot read JSON file {path!r}: {exc}"
+    try:
+        return json.loads(text), None
+    except json.JSONDecodeError as exc:
+        return None, f"malformed JSON in {path!r}: {exc}"
+
+
+def _parse_commit_subjects(data: object) -> tuple[list[str] | None, list[str]]:
+    """Extract commit subjects from trusted JSON; fail closed on bad shape."""
+    if not isinstance(data, list):
+        return None, ["commit records JSON top level must be an array"]
+    if not data:
+        return None, ["no commits found in commit records"]
+    subjects: list[str] = []
+    errors: list[str] = []
+    for index, item in enumerate(data):
+        label = f"commit record {index + 1}"
+        if not isinstance(item, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        if "sha" not in item or "subject" not in item:
+            errors.append(f"{label} is missing required sha/subject fields")
+            continue
+        sha = item["sha"]
+        subject = item["subject"]
+        if not isinstance(sha, str) or SHA_PATTERN.fullmatch(sha) is None:
+            errors.append(f"{label} has invalid sha: {sha!r}")
+            continue
+        if not isinstance(subject, str):
+            errors.append(f"{label} has invalid subject: {subject!r}")
+            continue
+        subjects.append(subject)
+    if errors:
+        return None, errors
+    if not subjects:
+        return None, ["no commits found in commit records"]
+    return subjects, []
+
+
+def _parse_file_records(data: object) -> tuple[list[dict] | None, list[str]]:
+    """Validate changed-file JSON shape; fail closed on bad shape."""
+    if not isinstance(data, list):
+        return None, ["changed-file records JSON top level must be an array"]
+    records: list[dict] = []
+    errors: list[str] = []
+    for index, item in enumerate(data):
+        label = f"changed-file record {index + 1}"
+        if not isinstance(item, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        if "filename" not in item:
+            errors.append(f"{label} is missing filename")
+            continue
+        filename = item["filename"]
+        previous = item.get("previous_filename")
+        filename_error = _validate_repo_path(filename)
+        if filename_error is not None:
+            errors.append(f"{label}: {filename_error}")
+            continue
+        if previous is not None and not isinstance(previous, str):
+            errors.append(f"{label} has invalid previous_filename: {previous!r}")
+            continue
+        if isinstance(previous, str):
+            previous_error = _validate_repo_path(previous)
+            if previous_error is not None:
+                errors.append(f"{label} previous_filename: {previous_error}")
+                continue
+        records.append({"filename": filename, "previous_filename": previous})
+    if errors:
+        return None, errors
+    return records, []
+
+
+def run_trusted_pr(
+    title: str, body_file: str, commits_file: str, files_file: str
+) -> int:
+    """Validate a trusted PR from base-revision data files."""
+    try:
+        body = Path(body_file).read_text(encoding="utf-8")
+    except OSError as exc:
+        print(f"error: cannot read body file: {exc}", file=sys.stderr)
+        return 2
+    commits_data, commits_read_error = _read_json_file(commits_file)
+    if commits_read_error is not None:
+        print(f"error: commit records: {commits_read_error}", file=sys.stderr)
+        return 2
+    files_data, files_read_error = _read_json_file(files_file)
+    if files_read_error is not None:
+        print(f"error: changed-file records: {files_read_error}", file=sys.stderr)
+        return 2
+    subjects, commit_errors = _parse_commit_subjects(commits_data)
+    if commit_errors:
+        for error in commit_errors:
+            print(f"error: commit records: {error}", file=sys.stderr)
+        return 2
+    file_records, file_errors = _parse_file_records(files_data)
+    if file_errors:
+        for error in file_errors:
+            print(f"error: changed-file records: {error}", file=sys.stderr)
+        return 2
+    assert subjects is not None
+    assert file_records is not None
+    errors = (
+        validate_subject(title)
+        + validate_pr_body(body)
+        + validate_commit_subjects(subjects)
+        + validate_governance_changes(file_records)
+    )
+    for error in errors:
+        print(f"error: {error}", file=sys.stderr)
+    return 2 if errors else 0
 
 
 def validate_subject(subject: str) -> list[str]:
@@ -192,11 +387,20 @@ def main(argv: list[str] | None = None) -> int:
     commits_parser = subparsers.add_parser("commits")
     commits_parser.add_argument("--base", required=True)
     commits_parser.add_argument("--head", required=True)
+    trusted_parser = subparsers.add_parser("trusted-pr")
+    trusted_parser.add_argument("--title", required=True)
+    trusted_parser.add_argument("--body-file", required=True)
+    trusted_parser.add_argument("--commits-file", required=True)
+    trusted_parser.add_argument("--files-file", required=True)
     args = parser.parse_args(argv)
     if args.command == "pr":
         return run_pr(args.title, args.body_file)
     if args.command == "commits":
         return run_commits(args.base, args.head)
+    if args.command == "trusted-pr":
+        return run_trusted_pr(
+            args.title, args.body_file, args.commits_file, args.files_file
+        )
     parser.error(f"unknown command: {args.command}")
     return 2
 
