@@ -74,6 +74,70 @@ class QualityWorkflowContractTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, lint_section)
 
+    @staticmethod
+    def _job_sections(workflow):
+        jobs_start = re.search(r"(?m)^jobs:\s*$", workflow)
+        if jobs_start is None:
+            raise AssertionError("workflow must define jobs")
+        jobs_workflow = workflow[jobs_start.end() :]
+        matches = list(re.finditer(r"(?m)^  ([A-Za-z0-9-]+):\s*$", jobs_workflow))
+        return {
+            match.group(1): jobs_workflow[match.start() : matches[index + 1].start()]
+            if index + 1 < len(matches)
+            else jobs_workflow[match.start() :]
+            for index, match in enumerate(matches)
+        }
+
+    def test_primary_job_key_is_quality(self):
+        self.assertRegex(self.workflow, r"(?m)^  quality:\s*$")
+        self.assertNotIn("test-and-build", self.workflow)
+
+    def test_quality_job_display_name(self):
+        sections = self._job_sections(self.workflow)
+        self.assertIn("quality", sections)
+        self.assertIn("name: Quality and tests", sections["quality"])
+
+    def test_required_ci_aggregate_is_stable(self):
+        sections = self._job_sections(self.workflow)
+        self.assertIn("required-ci", sections)
+        aggregate = sections["required-ci"]
+        self.assertIn("name: Required CI", aggregate)
+        self.assertRegex(aggregate, r"(?m)^    needs:\s*quality\s*$")
+        self.assertRegex(aggregate, r"(?m)^\s+if:\s*\$\{\{\s*always\(\)\s*\}\}\s*$")
+        self.assertIn("runs-on: ubuntu-24.04", aggregate)
+        self.assertRegex(aggregate, r"(?m)^\s+timeout-minutes:\s*5\s*$")
+        self.assertIn("contents: read", aggregate)
+        self.assertIn("needs.quality.result", aggregate)
+
+    def test_required_ci_aggregate_does_not_repeat_work(self):
+        aggregate = self._job_sections(self.workflow)["required-ci"]
+        for forbidden in (
+            "uv sync",
+            "uv run",
+            "uv build",
+            "ruff",
+            "upload-artifact",
+            "secrets.",
+            "contents: write",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, aggregate)
+
+    def test_quality_commands_are_preserved(self):
+        for fragment in (
+            "uv lock --check",
+            "run: uv sync --locked",
+            "uv run ruff check .",
+            "uv run ruff format --check .",
+            "uv audit --locked",
+            "uv run python -m unittest discover -v",
+            "run: uv build --wheel",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, self.workflow)
+        self.assertRegex(self.workflow, r"(?m)^  pull_request:\s*$")
+        self.assertRegex(self.workflow, r"(?m)^permissions:\n  contents: read\s*$")
+
 
 if __name__ == "__main__":
     unittest.main()
