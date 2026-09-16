@@ -115,6 +115,28 @@ class PrGovernanceWorkflowTests(unittest.TestCase):
         self.assertRegex(self.workflow, re.compile(r"PR_TITLE", re.MULTILINE))
         self.assertRegex(self.workflow, re.compile(r"RUNNER_TEMP/pr-body\.md"))
 
+    def test_slurped_pages_are_not_reslurped(self):
+        self.assertNotIn("jq -s", self.workflow)
+
+    def test_paginated_api_calls_retain_paginate_and_slurp(self):
+        self.assertGreaterEqual(self.workflow.count("--paginate"), 2)
+        self.assertGreaterEqual(self.workflow.count("--slurp"), 2)
+
+    def test_commit_pages_normalized_exactly_once(self):
+        self.assertIn('"$RUNNER_TEMP/commits-pages.json"', self.workflow)
+        self.assertIn('"$RUNNER_TEMP/pr-commits.json"', self.workflow)
+        self.assertRegex(self.workflow, r"jq\s+(\\\n\s+)?'add \| map")
+        self.assertIn("sha: .sha", self.workflow)
+        self.assertIn("$RUNNER_TEMP/commits-pages.json", self.workflow)
+
+    def test_file_pages_normalized_exactly_once(self):
+        self.assertIn('"$RUNNER_TEMP/files-pages.json"', self.workflow)
+        self.assertIn('"$RUNNER_TEMP/pr-files.json"', self.workflow)
+        self.assertRegex(self.workflow, r"jq\s+(\\\n\s+)?'add \| map")
+        self.assertIn("filename: .filename", self.workflow)
+        self.assertIn("previous_filename", self.workflow)
+        self.assertIn("$RUNNER_TEMP/files-pages.json", self.workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
