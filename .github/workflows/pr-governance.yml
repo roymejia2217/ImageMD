@@ -38,9 +38,21 @@ jobs:
               ;;
           esac
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits" --paginate --slurp > "$RUNNER_TEMP/commits-pages.json"
-          jq -s 'add | map({sha: .sha, subject: (.commit.message | split("\n")[0])})' "$RUNNER_TEMP/commits-pages.json" > "$RUNNER_TEMP/pr-commits.json"
+          jq \
+            'add | map({
+               sha: .sha,
+               subject: (.commit.message | split("\n")[0])
+             })' \
+            "$RUNNER_TEMP/commits-pages.json" \
+            > "$RUNNER_TEMP/pr-commits.json"
           gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --slurp > "$RUNNER_TEMP/files-pages.json"
-          jq -s 'add | map({filename: .filename, previous_filename: .previous_filename})' "$RUNNER_TEMP/files-pages.json" > "$RUNNER_TEMP/pr-files.json"
+          jq \
+            'add | map({
+               filename: .filename,
+               previous_filename: .previous_filename
+             })' \
+            "$RUNNER_TEMP/files-pages.json" \
+            > "$RUNNER_TEMP/pr-files.json"
 
       - name: Validate PR title and body
         env:
