@@ -48,7 +48,9 @@ Commit locally, push the branch, and open a pull request. The pull request
 must satisfy the executable PR contract enforced by the `Required PR
 Governance` check (conventional title plus the `Summary`, `Verification`,
 and `Release impact` sections) and the `Required CI` aggregate on top of the
-quality job.
+quality job. Every commit in a pull request must use the repository
+Conventional Commit subject contract; the quality job validates each commit
+subject in the pull-request range before installing dependencies.
 
 ## Branch and release rules
 
