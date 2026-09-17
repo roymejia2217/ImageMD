@@ -98,9 +98,10 @@ change branch
 -> repository rules
 -> native GitHub merge
 -> main
+```
 
-The pull request Verification section describes the verification strategy
-and references Required PR Governance and Required CI. Volatile execution
+The pull request `Verification` section describes the verification strategy
+and references `Required PR Governance` and `Required CI`. Volatile execution
 results such as test counts, skipped counts, vulnerability counts, workflow
 run numbers, commit SHAs, and artifact hashes belong to the current GitHub
 checks and are not copied into durable pull-request prose.
@@ -108,8 +109,8 @@ checks and are not copied into durable pull-request prose.
 Governance-root maintenance is isolated from ordinary product work. A
 governance-maintenance pull request must originate from the same repository,
 use a governance/ branch, use a governance-scoped Conventional Commit title,
-contain a ## Governance maintenance section beginning with
-Mode: governance-maintenance, and modify governance-root paths only.
+contain a `## Governance maintenance` section beginning with
+`Mode: governance-maintenance`, and modify governance-root paths only.
 
 Once repository native auto-merge is enabled, a contributor with write
 permission may arm a pull request for rebase auto-merge. Arming auto-merge is
