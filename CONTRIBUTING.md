@@ -78,7 +78,7 @@ workflow and ruleset remain authoritative when this prose disagrees.
 
 ## Repository-governed contribution protocol
 
-The repository applies the same change protocol regardless of whether the
+The repository applies the same acceptance policy regardless of whether the
 executor is a human developer, an IDE, a coding agent, a CLI automation, or
 another implementation tool. Executor identity does not change acceptance
 criteria.
@@ -93,11 +93,11 @@ change branch
 -> Conventional Commit
 -> push branch
 -> pull request
+-> arm native GitHub auto-merge
 -> Required PR Governance
 -> Required CI
 -> repository rules
--> native GitHub merge
--> main
+-> rebase into main
 ```
 
 The pull request `Verification` section describes the verification strategy
@@ -108,11 +108,31 @@ checks and are not copied into durable pull-request prose.
 
 Governance-root maintenance is isolated from ordinary product work. A
 governance-maintenance pull request must originate from the same repository,
-use a governance/ branch, use a governance-scoped Conventional Commit title,
+use a `governance/` branch, use a governance-scoped Conventional Commit title,
 contain a `## Governance maintenance` section beginning with
 `Mode: governance-maintenance`, and modify governance-root paths only.
 
-Once repository native auto-merge is enabled, a contributor with write
-permission may arm a pull request for rebase auto-merge. Arming auto-merge is
-not approval: GitHub merges only after the repository's required rules and
-checks are satisfied. A failing or incomplete pull request remains open.
+Repository-native auto-merge is the steady-state integration mechanism. A
+write-authorized repository actor arms a pull request against the exact head
+revision that was observed during preflight:
+
+```text
+gh pr merge <PR_NUMBER> --repo roymejia2217/ImageMD --auto --rebase --match-head-commit <EXACT_HEAD_SHA>
+```
+
+Arming auto-merge is not approval. It is a conditional instruction to GitHub
+to perform a rebase only after all repository-required rules and checks are
+satisfied. A failing or incomplete pull request remains open. No executor
+waits for CI and then performs a second approval step.
+
+Steady-state auto-merge must never use `--admin`. Administrative bypass is not
+part of the ordinary contribution protocol.
+
+A contributor without repository write permission cannot arm native
+auto-merge directly. The contribution is still evaluated by exactly the same
+repository policies, and a write-authorized repository actor may arm the pull
+request without changing those acceptance criteria.
+
+If GitHub disables auto-merge after a later head update or base-branch change,
+it must be re-armed against the then-current pull-request head. A previously
+observed SHA must not be reused blindly.
