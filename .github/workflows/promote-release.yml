@@ -27,6 +27,8 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate the requested release tag
         shell: sh
@@ -38,6 +40,15 @@ jobs:
             printf 'Tag %s does not match project version tag %s.\n' "${{ inputs.tag }}" "$expected_tag"
             exit 1
           fi
+
+      - name: Validate protected-main release provenance
+        shell: sh
+        run: |
+          set -eu
+          python -m ci.release_provenance \
+            --source-ref "refs/tags/${{ inputs.tag }}" \
+            --main-ref refs/remotes/origin/main \
+            --require-tag
 
       - name: Download the release candidate
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
