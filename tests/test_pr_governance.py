@@ -31,6 +31,48 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parents[1]
 
+CONTRIBUTOR_PROTOCOL_SECTION = """## Repository-governed contribution protocol
+
+The repository applies the same change protocol regardless of whether the
+executor is a human developer, an IDE, a coding agent, a CLI automation, or
+another implementation tool. Executor identity does not change acceptance
+criteria.
+
+An ordinary change follows this path:
+
+```text
+change branch
+-> XP test-first implementation
+-> local focused gate
+-> complete local gate
+-> Conventional Commit
+-> push branch
+-> pull request
+-> Required PR Governance
+-> Required CI
+-> repository rules
+-> native GitHub merge
+-> main
+```
+
+The pull request `Verification` section describes the verification strategy
+and references `Required PR Governance` and `Required CI`. Volatile execution
+results such as test counts, skipped counts, vulnerability counts, workflow
+run numbers, commit SHAs, and artifact hashes belong to the current GitHub
+checks and are not copied into durable pull-request prose.
+
+Governance-root maintenance is isolated from ordinary product work. A
+governance-maintenance pull request must originate from the same repository,
+use a governance/ branch, use a governance-scoped Conventional Commit title,
+contain a `## Governance maintenance` section beginning with
+`Mode: governance-maintenance`, and modify governance-root paths only.
+
+Once repository native auto-merge is enabled, a contributor with write
+permission may arm a pull request for rebase auto-merge. Arming auto-merge is
+not approval: GitHub merges only after the repository's required rules and
+checks are satisfied. A failing or incomplete pull request remains open.
+"""
+
 VALID_BODY = """## Summary
 
 Added a Windows release builder.
@@ -102,6 +144,29 @@ def run_governance_cli(title, body):
     finally:
         Path(body_path).unlink(missing_ok=True)
     return completed.returncode
+
+
+class ContributorProtocolDocumentationTests(unittest.TestCase):
+    def test_repository_governed_protocol_matches_canonical_contract(self):
+        content = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+        marker = "## Repository-governed contribution protocol"
+        self.assertEqual(
+            content.count(marker),
+            1,
+            "repository-governed contribution protocol must exist once",
+        )
+        actual = content.split(marker, maxsplit=1)[1]
+        actual_section = marker + actual
+        self.assertEqual(
+            actual_section.rstrip() + "\n",
+            CONTRIBUTOR_PROTOCOL_SECTION,
+        )
+
+    def test_protocol_closes_code_fence_before_governance_prose(self):
+        self.assertIn(
+            "-> main\n```\n\nThe pull request `Verification`",
+            CONTRIBUTOR_PROTOCOL_SECTION,
+        )
 
 
 class SubjectContractTests(unittest.TestCase):
