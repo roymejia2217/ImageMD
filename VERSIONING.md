@@ -87,6 +87,25 @@ weakening Conventional Commit grammar.
 A release tag must have the form `vMAJOR.MINOR.PATCH` and its version
 must exactly match `src.__version__` at the tagged revision.
 
+Release provenance is executable policy. A stable release tag is valid only
+when its peeled commit is an ancestor of protected `main`, the workflow
+checkout resolves to that same commit, and the tag version matches
+`src.__version__` at that revision.
+
+Manual package-candidate validation accepts only a stable release tag or a
+full lowercase 40-character commit SHA. Mutable branch names, `HEAD`, and
+symbolic `refs/heads/*` values are not release sources.
+
+The package release gate resolves the requested source once. Every downstream
+packaging job consumes that resolved commit instead of resolving the original
+tag or input again. This prevents package stages from silently switching
+source revisions during one workflow execution.
+
+Release guard and release promotion independently revalidate protected-main
+ancestry. These checks form the repository-side release provenance contract.
+Server-side release-tag immutability is a separate control and is introduced
+by the dedicated tag-governance phase.
+
 Once a version is published, that published version must not be
 retroactively changed. A later modification requires a new version.
 

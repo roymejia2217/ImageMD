@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import re
@@ -13,6 +14,10 @@ VERSION_FILE = ROOT / "src" / "__init__.py"
 PYPROJECT = ROOT / "pyproject.toml"
 CONTRIBUTING = ROOT / "CONTRIBUTING.md"
 VERSIONING = ROOT / "VERSIONING.md"
+RELEASE_PROVENANCE = ROOT / "ci" / "release_provenance.py"
+RELEASE_GUARD = ROOT / ".github" / "workflows" / "release-guard.yml"
+PACKAGE_WORKFLOW = ROOT / ".github" / "workflows" / "package.yml"
+PROMOTE_RELEASE = ROOT / ".github" / "workflows" / "promote-release.yml"
 
 SEMVER_PATTERN = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SUBJECT_PATTERN = re.compile(
@@ -226,6 +231,327 @@ def _history_contract_is_required() -> bool:
     ref = os.environ.get("GITHUB_REF", "")
 
     return event == "pull_request" or ref == "refs/heads/main"
+
+
+def _load_release_provenance_module():
+    if not RELEASE_PROVENANCE.is_file():
+        raise AssertionError("ci/release_provenance.py must exist")
+
+    spec = importlib.util.spec_from_file_location(
+        "imagemd_release_provenance_contract",
+        RELEASE_PROVENANCE,
+    )
+
+    if spec is None or spec.loader is None:
+        raise AssertionError("unable to load ci/release_provenance.py")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class ReleaseProvenanceContractTests(unittest.TestCase):
+    def test_release_provenance_module_exists(self):
+        self.assertTrue(
+            RELEASE_PROVENANCE.is_file(),
+            "ci/release_provenance.py must exist",
+        )
+
+    def test_source_ref_accepts_only_immutable_contract_forms(self):
+        module = _load_release_provenance_module()
+
+        sha = "a" * 40
+
+        self.assertEqual(
+            module.normalize_source_ref(
+                sha,
+                require_tag=False,
+            ),
+            (sha, None),
+        )
+
+        self.assertEqual(
+            module.normalize_source_ref(
+                "v1.2.3",
+                require_tag=False,
+            ),
+            ("refs/tags/v1.2.3", "v1.2.3"),
+        )
+
+        self.assertEqual(
+            module.normalize_source_ref(
+                "refs/tags/v1.2.3",
+                require_tag=True,
+            ),
+            ("refs/tags/v1.2.3", "v1.2.3"),
+        )
+
+        for invalid in (
+            "main",
+            "HEAD",
+            "feature/example",
+            "refs/heads/main",
+            "v1.2",
+            "v1.2.3-rc1",
+            "A" * 40,
+            " " + sha,
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(module.ReleaseProvenanceError):
+                    module.normalize_source_ref(
+                        invalid,
+                        require_tag=False,
+                    )
+
+    def test_require_tag_rejects_bare_commit_sha(self):
+        module = _load_release_provenance_module()
+
+        with self.assertRaises(module.ReleaseProvenanceError):
+            module.normalize_source_ref(
+                "a" * 40,
+                require_tag=True,
+            )
+
+    def test_release_source_is_bound_to_checkout_and_main(self):
+        module = _load_release_provenance_module()
+
+        source_commit = "1" * 40
+        main_commit = "2" * 40
+
+        def resolve(ref):
+            return {
+                "refs/tags/v1.2.3": source_commit,
+                "HEAD": source_commit,
+                "refs/remotes/origin/main": main_commit,
+            }[ref]
+
+        with patch.object(
+            module,
+            "_resolve_commit",
+            side_effect=resolve,
+        ):
+            with patch.object(
+                module,
+                "_is_ancestor",
+                return_value=True,
+            ) as ancestry:
+                with patch.object(
+                    module,
+                    "_project_version",
+                    return_value="1.2.3",
+                ):
+                    result = module.validate_release_source(
+                        "v1.2.3",
+                        "refs/remotes/origin/main",
+                        require_tag=True,
+                    )
+
+        self.assertEqual(
+            result["source_commit"],
+            source_commit,
+        )
+        self.assertEqual(
+            result["main_commit"],
+            main_commit,
+        )
+        self.assertEqual(
+            result["tag"],
+            "v1.2.3",
+        )
+
+        ancestry.assert_called_once_with(
+            source_commit,
+            main_commit,
+        )
+
+    def test_release_source_rejects_off_main_commit(self):
+        module = _load_release_provenance_module()
+
+        source_commit = "1" * 40
+        main_commit = "2" * 40
+
+        def resolve(ref):
+            return {
+                "refs/tags/v1.2.3": source_commit,
+                "HEAD": source_commit,
+                "refs/remotes/origin/main": main_commit,
+            }[ref]
+
+        with patch.object(
+            module,
+            "_resolve_commit",
+            side_effect=resolve,
+        ):
+            with patch.object(
+                module,
+                "_is_ancestor",
+                return_value=False,
+            ):
+                with patch.object(
+                    module,
+                    "_project_version",
+                    return_value="1.2.3",
+                ):
+                    with self.assertRaisesRegex(
+                        module.ReleaseProvenanceError,
+                        "protected main",
+                    ):
+                        module.validate_release_source(
+                            "v1.2.3",
+                            "refs/remotes/origin/main",
+                            require_tag=True,
+                        )
+
+    def test_release_source_rejects_checkout_mismatch(self):
+        module = _load_release_provenance_module()
+
+        source_commit = "1" * 40
+        checkout_commit = "3" * 40
+        main_commit = "2" * 40
+
+        def resolve(ref):
+            return {
+                "refs/tags/v1.2.3": source_commit,
+                "HEAD": checkout_commit,
+                "refs/remotes/origin/main": main_commit,
+            }[ref]
+
+        with patch.object(
+            module,
+            "_resolve_commit",
+            side_effect=resolve,
+        ):
+            with self.assertRaisesRegex(
+                module.ReleaseProvenanceError,
+                "checked-out HEAD",
+            ):
+                module.validate_release_source(
+                    "v1.2.3",
+                    "refs/remotes/origin/main",
+                    require_tag=True,
+                )
+
+    def test_release_tag_must_match_project_version(self):
+        module = _load_release_provenance_module()
+
+        source_commit = "1" * 40
+        main_commit = "2" * 40
+
+        def resolve(ref):
+            return {
+                "refs/tags/v1.2.3": source_commit,
+                "HEAD": source_commit,
+                "refs/remotes/origin/main": main_commit,
+            }[ref]
+
+        with patch.object(
+            module,
+            "_resolve_commit",
+            side_effect=resolve,
+        ):
+            with patch.object(
+                module,
+                "_is_ancestor",
+                return_value=True,
+            ):
+                with patch.object(
+                    module,
+                    "_project_version",
+                    return_value="1.2.4",
+                ):
+                    with self.assertRaisesRegex(
+                        module.ReleaseProvenanceError,
+                        "project version",
+                    ):
+                        module.validate_release_source(
+                            "v1.2.3",
+                            "refs/remotes/origin/main",
+                            require_tag=True,
+                        )
+
+    def test_release_workflows_use_shared_provenance_validator(self):
+        guard = RELEASE_GUARD.read_text(encoding="utf-8")
+        package = PACKAGE_WORKFLOW.read_text(encoding="utf-8")
+        promotion = PROMOTE_RELEASE.read_text(encoding="utf-8")
+
+        for workflow in (
+            guard,
+            package,
+            promotion,
+        ):
+            with self.subTest():
+                self.assertIn(
+                    "python -m ci.release_provenance",
+                    workflow,
+                )
+                self.assertIn(
+                    "refs/remotes/origin/main",
+                    workflow,
+                )
+
+        self.assertIn("--require-tag", guard)
+        self.assertIn("--require-tag", promotion)
+
+    def test_provenance_checkouts_are_hardened(self):
+        guard = RELEASE_GUARD.read_text(encoding="utf-8")
+        package = PACKAGE_WORKFLOW.read_text(encoding="utf-8")
+        promotion = PROMOTE_RELEASE.read_text(encoding="utf-8")
+
+        self.assertIn("fetch-depth: 0", guard)
+        self.assertIn("persist-credentials: false", guard)
+
+        self.assertIn("fetch-depth: 0", package)
+        self.assertEqual(
+            package.count("persist-credentials: false"),
+            8,
+        )
+
+        self.assertIn("fetch-depth: 0", promotion)
+        self.assertIn(
+            "persist-credentials: false",
+            promotion,
+        )
+
+    def test_package_source_is_resolved_once_and_forwarded(self):
+        package = PACKAGE_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "source_commit: ${{ steps.provenance.outputs.source_commit }}",
+            package,
+        )
+
+        self.assertIn(
+            "PACKAGE_REF: ${{ needs.release-gate.outputs.source_commit }}",
+            package,
+        )
+
+        self.assertEqual(
+            package.count(
+                "PACKAGE_REF: ${{ needs.bundle-stage.outputs.source_commit }}"
+            ),
+            6,
+        )
+
+        self.assertEqual(
+            package.count("ref: ${{ env.PACKAGE_REF }}"),
+            8,
+        )
+
+    def test_versioning_documents_protected_main_provenance(self):
+        versioning = VERSIONING.read_text(encoding="utf-8")
+
+        for required in (
+            "protected `main`",
+            "40-character commit SHA",
+            "resolved commit",
+            "ancestor",
+            "release provenance",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(
+                    required,
+                    versioning,
+                )
 
 
 class VersionContractTests(unittest.TestCase):
