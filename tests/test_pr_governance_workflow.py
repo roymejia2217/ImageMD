@@ -137,6 +137,29 @@ class PrGovernanceWorkflowTests(unittest.TestCase):
         self.assertIn("previous_filename", self.workflow)
         self.assertIn("$RUNNER_TEMP/files-pages.json", self.workflow)
 
+    def test_trusted_pr_context_is_materialized_from_event_metadata(self):
+        for expected in (
+            "github.event.pull_request.base.ref",
+            "github.event.pull_request.head.ref",
+            "github.event.pull_request.base.repo.full_name",
+            "github.event.pull_request.head.repo.full_name",
+            "github.event.pull_request.author_association",
+            "$RUNNER_TEMP/pr-context.json",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, self.workflow)
+
+    def test_validator_receives_context_file(self):
+        self.assertIn(
+            '--context-file "$RUNNER_TEMP/pr-context.json"',
+            self.workflow,
+        )
+
+    def test_context_is_data_only(self):
+        self.assertIn("jq -n", self.workflow)
+        self.assertNotIn("eval ", self.workflow)
+        self.assertNotIn("exec ", self.workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

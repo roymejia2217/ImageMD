@@ -75,3 +75,43 @@ workflow and ruleset remain authoritative when this prose disagrees.
 - Release publication requires the existing package and promotion contracts
   (`package.yml`, `release-guard.yml`, `promote-release.yml`); this process
   document does not replace them.
+
+## Repository-governed contribution protocol
+
+The repository applies the same change protocol regardless of whether the
+executor is a human developer, an IDE, a coding agent, a CLI automation, or
+another implementation tool. Executor identity does not change acceptance
+criteria.
+
+An ordinary change follows this path:
+
+```text
+change branch
+-> XP test-first implementation
+-> local focused gate
+-> complete local gate
+-> Conventional Commit
+-> push branch
+-> pull request
+-> Required PR Governance
+-> Required CI
+-> repository rules
+-> native GitHub merge
+-> main
+
+The pull request Verification section describes the verification strategy
+and references Required PR Governance and Required CI. Volatile execution
+results such as test counts, skipped counts, vulnerability counts, workflow
+run numbers, commit SHAs, and artifact hashes belong to the current GitHub
+checks and are not copied into durable pull-request prose.
+
+Governance-root maintenance is isolated from ordinary product work. A
+governance-maintenance pull request must originate from the same repository,
+use a governance/ branch, use a governance-scoped Conventional Commit title,
+contain a ## Governance maintenance section beginning with
+Mode: governance-maintenance, and modify governance-root paths only.
+
+Once repository native auto-merge is enabled, a contributor with write
+permission may arm a pull request for rebase auto-merge. Arming auto-merge is
+not approval: GitHub merges only after the repository's required rules and
+checks are satisfied. A failing or incomplete pull request remains open.

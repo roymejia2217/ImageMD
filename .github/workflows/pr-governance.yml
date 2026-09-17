@@ -54,6 +54,30 @@ jobs:
             "$RUNNER_TEMP/files-pages.json" \
             > "$RUNNER_TEMP/pr-files.json"
 
+      - name: Materialize trusted pull request context
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BASE_REPO: ${{ github.event.pull_request.base.repo.full_name }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg base_ref "$PR_BASE_REF" \
+            --arg head_ref "$PR_HEAD_REF" \
+            --arg base_repo "$PR_BASE_REPO" \
+            --arg head_repo "$PR_HEAD_REPO" \
+            --arg author_association "$PR_AUTHOR_ASSOCIATION" \
+            '{
+              base_ref: $base_ref,
+              head_ref: $head_ref,
+              base_repo: $base_repo,
+              head_repo: $head_repo,
+              author_association: $author_association
+            }' \
+            > "$RUNNER_TEMP/pr-context.json"
+
       - name: Validate PR title and body
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -64,4 +88,5 @@ jobs:
             --title "$PR_TITLE" \
             --body-file "$RUNNER_TEMP/pr-body.md" \
             --commits-file "$RUNNER_TEMP/pr-commits.json" \
-            --files-file "$RUNNER_TEMP/pr-files.json"
+            --files-file "$RUNNER_TEMP/pr-files.json" \
+            --context-file "$RUNNER_TEMP/pr-context.json"

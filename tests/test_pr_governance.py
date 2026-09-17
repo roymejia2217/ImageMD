@@ -1,5 +1,6 @@
 """Behavioral contract for the executable PR governance validator."""
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -22,6 +23,11 @@ try:
 except ImportError:
     validate_governance_changes = None  # type: ignore[assignment]
 
+try:
+    from ci.governance import validate_trusted_change_policy
+except ImportError:
+    validate_trusted_change_policy = None  # type: ignore[assignment]
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,7 +37,10 @@ Added a Windows release builder.
 
 ## Verification
 
-Ran the focused contract tests.
+Authoritative remote verification is provided by:
+
+- `Required PR Governance`
+- `Required CI`
 
 ## Release impact
 
@@ -43,6 +52,26 @@ VALID_SUBJECTS = (
     "fix(release): normalize artifact names",
     "ci(governance): enforce PR contract",
     "refactor(domain)!: replace temporal model",
+)
+
+ORDINARY_CONTEXT = {
+    "base_ref": "main",
+    "head_ref": "feature/example",
+    "base_repo": "example/ImageMD",
+    "head_repo": "example/ImageMD",
+    "author_association": "COLLABORATOR",
+}
+
+MAINTENANCE_CONTEXT = {
+    "base_ref": "main",
+    "head_ref": "governance/update-policy",
+    "base_repo": "example/ImageMD",
+    "head_repo": "example/ImageMD",
+    "author_association": "COLLABORATOR",
+}
+
+MAINTENANCE_BODY = (
+    VALID_BODY + "\n## Governance maintenance\n\n" + "Mode: governance-maintenance\n"
 )
 
 
@@ -128,7 +157,11 @@ class BodyContractTests(unittest.TestCase):
 
     def test_missing_verification_is_rejected(self):
         body = VALID_BODY.replace(
-            "## Verification\n\nRan the focused contract tests.\n\n", ""
+            "## Verification\n\n"
+            "Authoritative remote verification is provided by:\n\n"
+            "- `Required PR Governance`\n"
+            "- `Required CI`\n\n",
+            "",
         )
         self.assertTrue(validate_pr_body(body))
 
@@ -173,10 +206,61 @@ class BodyContractTests(unittest.TestCase):
     def test_filled_body_keeps_template_comments(self):
         body = (
             "## Summary\n\n<!-- Explain the change. -->\n\nAdded the builder.\n\n"
-            "## Verification\n\n<!-- Provide evidence. -->\n\nRan tests.\n\n"
+            "## Verification\n\n<!-- Provide evidence. -->\n\n"
+            "Authoritative remote verification is provided by:\n\n"
+            "- `Required PR Governance`\n"
+            "- `Required CI`\n\n"
             "## Release impact\n\n<!-- State impact. -->\n\nNone.\n"
         )
         self.assertEqual(validate_pr_body(body), [])
+
+    def test_verification_requires_required_pr_governance_reference(self):
+        body = VALID_BODY.replace(
+            "- `Required PR Governance`\n",
+            "",
+        )
+        errors = validate_pr_body(body)
+        self.assertTrue(errors)
+        self.assertIn(
+            "Required PR Governance",
+            "\n".join(errors),
+        )
+
+    def test_verification_requires_required_ci_reference(self):
+        body = VALID_BODY.replace(
+            "- `Required CI`\n",
+            "",
+        )
+        errors = validate_pr_body(body)
+        self.assertTrue(errors)
+        self.assertIn(
+            "Required CI",
+            "\n".join(errors),
+        )
+
+    def test_verification_rejects_volatile_execution_claims(self):
+        claims = (
+            "276 tests",
+            "276 passed",
+            "1 skipped",
+            "0 vulnerabilities",
+            "workflow run 35163777445",
+            "a" * 40,
+            "b" * 64,
+        )
+
+        for claim in claims:
+            with self.subTest(claim=claim):
+                body = VALID_BODY.replace(
+                    "Authoritative remote verification is provided by:",
+                    (f"Authoritative remote verification is provided by:\n\n{claim}"),
+                )
+                errors = validate_pr_body(body)
+                self.assertTrue(errors)
+                self.assertIn(
+                    "volatile",
+                    "\n".join(errors).lower(),
+                )
 
 
 class ExtractSectionsTests(unittest.TestCase):
@@ -184,7 +268,8 @@ class ExtractSectionsTests(unittest.TestCase):
         sections = extract_required_sections(VALID_BODY)
         self.assertEqual(set(sections), {"Summary", "Verification", "Release impact"})
         self.assertEqual(sections["Summary"], "Added a Windows release builder.")
-        self.assertEqual(sections["Verification"], "Ran the focused contract tests.")
+        self.assertIn("Required PR Governance", sections["Verification"])
+        self.assertIn("Required CI", sections["Verification"])
         self.assertEqual(sections["Release impact"], "None.")
 
     def test_extract_strips_html_comments(self):
@@ -387,6 +472,11 @@ class GovernanceChangesContractTests(unittest.TestCase):
         "tests/test_pr_governance.py",
         "tests/test_pr_governance_workflow.py",
         "tests/test_quality_workflow_contract.py",
+        ".github/pull_request_template.md",
+        "CONTRIBUTING.md",
+        "VERSIONING.md",
+        "tests/test_pull_request_template_contract.py",
+        "tests/test_version_contract.py",
     )
 
     ACCEPTED_PATHS = (
@@ -394,7 +484,6 @@ class GovernanceChangesContractTests(unittest.TestCase):
         "src/adapters/foo.py",
         "tests/test_product_feature.py",
         "README.md",
-        "CONTRIBUTING.md",
     )
 
     def _validator(self):
@@ -414,10 +503,15 @@ class GovernanceChangesContractTests(unittest.TestCase):
         self.assertEqual(
             set(getattr(gov, "PROTECTED_GOVERNANCE_PATHS", set())),
             {
+                ".github/pull_request_template.md",
+                "CONTRIBUTING.md",
+                "VERSIONING.md",
                 "tests/test_architecture_contract.py",
                 "tests/test_pr_governance.py",
                 "tests/test_pr_governance_workflow.py",
                 "tests/test_quality_workflow_contract.py",
+                "tests/test_pull_request_template_contract.py",
+                "tests/test_version_contract.py",
             },
         )
 
@@ -481,8 +575,237 @@ class GovernanceChangesContractTests(unittest.TestCase):
                 self.assertTrue(validate(records))
 
 
-def run_trusted_pr_cli(title, body, commits_text=None, files_text=None):
+class GovernanceMaintenanceContractTests(unittest.TestCase):
+    def _validator(self):
+        self.assertTrue(
+            callable(validate_trusted_change_policy),
+            "ci.governance must expose validate_trusted_change_policy",
+        )
+        return validate_trusted_change_policy
+
+    def test_valid_governance_maintenance_context_is_accepted(self):
+        validate = self._validator()
+
+        records = [
+            {
+                "filename": "ci/governance.py",
+                "previous_filename": None,
+            },
+            {
+                "filename": "tests/test_pr_governance.py",
+                "previous_filename": None,
+            },
+        ]
+
+        self.assertEqual(
+            validate(
+                "ci(governance): update repository policy",
+                MAINTENANCE_BODY,
+                records,
+                MAINTENANCE_CONTEXT,
+            ),
+            [],
+        )
+
+    def test_ordinary_pr_still_rejects_protected_path(self):
+        validate = self._validator()
+
+        errors = validate(
+            "ci: update policy",
+            VALID_BODY,
+            [
+                {
+                    "filename": "ci/governance.py",
+                    "previous_filename": None,
+                }
+            ],
+            ORDINARY_CONTEXT,
+        )
+
+        self.assertTrue(errors)
+        self.assertIn(
+            "protected",
+            "\n".join(errors).lower(),
+        )
+
+    def test_maintenance_rejects_product_path_mixing(self):
+        validate = self._validator()
+
+        errors = validate(
+            "ci(governance): update repository policy",
+            MAINTENANCE_BODY,
+            [
+                {
+                    "filename": "ci/governance.py",
+                    "previous_filename": None,
+                },
+                {
+                    "filename": "src/application/foo.py",
+                    "previous_filename": None,
+                },
+            ],
+            MAINTENANCE_CONTEXT,
+        )
+
+        self.assertTrue(errors)
+        self.assertIn(
+            "mix",
+            "\n".join(errors).lower(),
+        )
+
+    def test_maintenance_requires_same_repository(self):
+        validate = self._validator()
+
+        context = dict(MAINTENANCE_CONTEXT)
+        context["head_repo"] = "fork/ImageMD"
+
+        errors = validate(
+            "ci(governance): update repository policy",
+            MAINTENANCE_BODY,
+            [
+                {
+                    "filename": "ci/governance.py",
+                    "previous_filename": None,
+                }
+            ],
+            context,
+        )
+
+        self.assertTrue(errors)
+        self.assertIn(
+            "same repository",
+            "\n".join(errors).lower(),
+        )
+
+    def test_maintenance_requires_trusted_author_association(self):
+        validate = self._validator()
+
+        context = dict(MAINTENANCE_CONTEXT)
+        context["author_association"] = "NONE"
+
+        errors = validate(
+            "ci(governance): update repository policy",
+            MAINTENANCE_BODY,
+            [
+                {
+                    "filename": "ci/governance.py",
+                    "previous_filename": None,
+                }
+            ],
+            context,
+        )
+
+        self.assertTrue(errors)
+        self.assertIn(
+            "association",
+            "\n".join(errors).lower(),
+        )
+
+    def test_maintenance_requires_governance_branch(self):
+        validate = self._validator()
+
+        context = dict(MAINTENANCE_CONTEXT)
+        context["head_ref"] = "feature/update-policy"
+
+        errors = validate(
+            "ci(governance): update repository policy",
+            MAINTENANCE_BODY,
+            [
+                {
+                    "filename": "ci/governance.py",
+                    "previous_filename": None,
+                }
+            ],
+            context,
+        )
+
+        self.assertTrue(errors)
+        self.assertIn(
+            "governance/",
+            "\n".join(errors),
+        )
+
+    def test_maintenance_requires_governance_scoped_title(self):
+        validate = self._validator()
+
+        errors = validate(
+            "feat: update policy",
+            MAINTENANCE_BODY,
+            [
+                {
+                    "filename": "ci/governance.py",
+                    "previous_filename": None,
+                }
+            ],
+            MAINTENANCE_CONTEXT,
+        )
+
+        self.assertTrue(errors)
+        self.assertIn(
+            "title",
+            "\n".join(errors).lower(),
+        )
+
+    def test_maintenance_requires_explicit_body_mode(self):
+        validate = self._validator()
+
+        errors = validate(
+            "ci(governance): update repository policy",
+            VALID_BODY,
+            [
+                {
+                    "filename": "ci/governance.py",
+                    "previous_filename": None,
+                }
+            ],
+            MAINTENANCE_CONTEXT,
+        )
+
+        self.assertTrue(errors)
+        self.assertIn(
+            "Governance maintenance",
+            "\n".join(errors),
+        )
+
+    def test_maintenance_marker_is_invalid_for_ordinary_change(self):
+        validate = self._validator()
+
+        errors = validate(
+            "ci(governance): update repository policy",
+            MAINTENANCE_BODY,
+            [
+                {
+                    "filename": "README.md",
+                    "previous_filename": None,
+                }
+            ],
+            MAINTENANCE_CONTEXT,
+        )
+
+        self.assertTrue(errors)
+
+    def test_new_governance_surfaces_are_protected(self):
+        from ci import governance as gov
+
+        protected = set(gov.PROTECTED_GOVERNANCE_PATHS)
+
+        required = {
+            ".github/pull_request_template.md",
+            "CONTRIBUTING.md",
+            "VERSIONING.md",
+            "tests/test_pull_request_template_contract.py",
+            "tests/test_version_contract.py",
+        }
+
+        self.assertTrue(required.issubset(protected))
+
+
+def run_trusted_pr_cli(
+    title, body, commits_text=None, files_text=None, context_text=None
+):
     """Execute trusted-pr CLI with temp files; return completed process."""
+    if context_text is None:
+        context_text = json.dumps(ORDINARY_CONTEXT)
     body_handle = tempfile.NamedTemporaryFile(
         mode="w", suffix=".md", encoding="utf-8", delete=False
     )
@@ -490,6 +813,7 @@ def run_trusted_pr_cli(title, body, commits_text=None, files_text=None):
     body_handle.close()
     commits_path = None
     files_path = None
+    context_path = None
     try:
         if commits_text is not None:
             commits_handle = tempfile.NamedTemporaryFile(
@@ -509,6 +833,15 @@ def run_trusted_pr_cli(title, body, commits_text=None, files_text=None):
             files_path = files_handle.name
         else:
             files_path = "/nonexistent-files.json"
+        if context_text is not None:
+            context_handle = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", encoding="utf-8", delete=False
+            )
+            context_handle.write(context_text)
+            context_handle.close()
+            context_path = context_handle.name
+        else:
+            context_path = "/nonexistent-context.json"
         completed = subprocess.run(
             [
                 sys.executable,
@@ -523,6 +856,8 @@ def run_trusted_pr_cli(title, body, commits_text=None, files_text=None):
                 commits_path,
                 "--files-file",
                 files_path,
+                "--context-file",
+                context_path,
             ],
             cwd=ROOT,
             capture_output=True,
@@ -535,6 +870,8 @@ def run_trusted_pr_cli(title, body, commits_text=None, files_text=None):
             Path(commits_path).unlink(missing_ok=True)
         if files_path is not None and files_path.startswith("/tmp"):
             Path(files_path).unlink(missing_ok=True)
+        if context_path is not None and context_path.startswith("/tmp"):
+            Path(context_path).unlink(missing_ok=True)
     return completed
 
 
@@ -646,7 +983,7 @@ class TrustedPrContractTests(unittest.TestCase):
             self._files(["src/application/foo.py", "ci/governance.py"]),
         )
         self.assertEqual(completed.returncode, 2)
-        self.assertIn("ci/governance.py", completed.stderr or "")
+        self.assertIn("governance", (completed.stderr or "").lower())
 
     def test_one_protected_path_makes_trusted_pr_invalid(self):
         completed = run_trusted_pr_cli(
@@ -656,7 +993,18 @@ class TrustedPrContractTests(unittest.TestCase):
             self._files(["tests/test_pr_governance.py"]),
         )
         self.assertEqual(completed.returncode, 2)
-        self.assertIn("tests/test_pr_governance.py", completed.stderr or "")
+        self.assertIn("governance", (completed.stderr or "").lower())
+
+    def test_malformed_context_json_fails_closed(self):
+        completed = run_trusted_pr_cli(
+            self.VALID_TITLE,
+            VALID_BODY,
+            self._commits(["feat: valid change"]),
+            self._files(["src/application/foo.py"]),
+            "not json",
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("context", (completed.stderr or "").lower())
 
 
 if __name__ == "__main__":

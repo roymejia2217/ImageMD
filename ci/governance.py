@@ -40,6 +40,33 @@ REQUIRED_HEADING_PATTERN = re.compile(r"##\s+(Summary|Verification|Release impac
 
 HTML_COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
 
+VERIFICATION_REQUIRED_MARKERS = (
+    "`Required PR Governance`",
+    "`Required CI`",
+)
+
+VOLATILE_VERIFICATION_PATTERNS = (
+    re.compile(r"\b\d+\s+tests?\b", re.IGNORECASE),
+    re.compile(r"\b\d+\s+(?:passed|failed|skipped)\b", re.IGNORECASE),
+    re.compile(r"\b\d+\s+vulnerabilit(?:y|ies)\b", re.IGNORECASE),
+    re.compile(r"\bworkflow\s+(?:run\s+)?#?\d+\b", re.IGNORECASE),
+    re.compile(r"\b[0-9a-f]{40}\b", re.IGNORECASE),
+    re.compile(r"\b[0-9a-f]{64}\b", re.IGNORECASE),
+)
+
+GOVERNANCE_MAINTENANCE_HEADING = "Governance maintenance"
+GOVERNANCE_MAINTENANCE_MODE = "Mode: governance-maintenance"
+
+TRUSTED_MAINTENANCE_ASSOCIATIONS = (
+    "OWNER",
+    "MEMBER",
+    "COLLABORATOR",
+)
+
+GOVERNANCE_MAINTENANCE_TITLE_PATTERN = re.compile(
+    r"(ci|test|docs|build|chore)\(governance\)(!)?: .+"
+)
+
 MAX_SUBJECT_LENGTH = 72
 
 PROTECTED_GOVERNANCE_PREFIXES = (
@@ -49,10 +76,15 @@ PROTECTED_GOVERNANCE_PREFIXES = (
 )
 
 PROTECTED_GOVERNANCE_PATHS = (
+    ".github/pull_request_template.md",
+    "CONTRIBUTING.md",
+    "VERSIONING.md",
     "tests/test_architecture_contract.py",
     "tests/test_pr_governance.py",
     "tests/test_pr_governance_workflow.py",
     "tests/test_quality_workflow_contract.py",
+    "tests/test_pull_request_template_contract.py",
+    "tests/test_version_contract.py",
 )
 
 
@@ -83,11 +115,32 @@ def _validate_repo_path(value: object) -> str | None:
     return None
 
 
-def validate_governance_changes(records: object) -> list[str]:
+def _record_paths(record: dict) -> tuple[str, ...]:
+    paths = [record["filename"]]
+    previous = record.get("previous_filename")
+
+    if isinstance(previous, str):
+        paths.append(previous)
+
+    return tuple(paths)
+
+
+def _records_contain_protected_path(records: list[dict]) -> bool:
+    return any(
+        _is_protected_path(path) for record in records for path in _record_paths(record)
+    )
+
+
+def validate_governance_changes(
+    records: object,
+    *,
+    maintenance: bool = False,
+) -> list[str]:
     """Validate changed-file records; empty means no governance violation."""
     errors: list[str] = []
     if not isinstance(records, list):
         return ["changed-file records must be a list"]
+    valid_records: list[dict] = []
     for index, record in enumerate(records):
         if not isinstance(record, dict):
             errors.append(f"changed-file record {index + 1} must be an object")
@@ -109,13 +162,31 @@ def validate_governance_changes(records: object) -> list[str]:
                     f"{previous_error}"
                 )
                 continue
+        valid_records.append(record)
         candidates = [filename]
         if isinstance(previous, str):
             candidates.append(previous)
-        for candidate in candidates:
-            if _is_protected_path(candidate):
-                errors.append(f"governance-root path is protected: {candidate}")
-                break
+        if not maintenance:
+            for candidate in candidates:
+                if _is_protected_path(candidate):
+                    errors.append(f"governance-root path is protected: {candidate}")
+                    break
+    if maintenance:
+        has_protected = any(
+            _is_protected_path(path)
+            for record in valid_records
+            for path in _record_paths(record)
+        )
+        if not has_protected:
+            errors.append("governance maintenance requires a governance-root path")
+        for record in valid_records:
+            for path in _record_paths(record):
+                if not _is_protected_path(path):
+                    errors.append(
+                        "governance maintenance must not mix protected "
+                        f"and ordinary paths: {path}"
+                    )
+                    break
     return errors
 
 
@@ -198,7 +269,11 @@ def _parse_file_records(data: object) -> tuple[list[dict] | None, list[str]]:
 
 
 def run_trusted_pr(
-    title: str, body_file: str, commits_file: str, files_file: str
+    title: str,
+    body_file: str,
+    commits_file: str,
+    files_file: str,
+    context_file: str,
 ) -> int:
     """Validate a trusted PR from base-revision data files."""
     try:
@@ -214,6 +289,10 @@ def run_trusted_pr(
     if files_read_error is not None:
         print(f"error: changed-file records: {files_read_error}", file=sys.stderr)
         return 2
+    context_data, context_read_error = _read_json_file(context_file)
+    if context_read_error is not None:
+        print(f"error: trusted PR context: {context_read_error}", file=sys.stderr)
+        return 2
     subjects, commit_errors = _parse_commit_subjects(commits_data)
     if commit_errors:
         for error in commit_errors:
@@ -224,13 +303,24 @@ def run_trusted_pr(
         for error in file_errors:
             print(f"error: changed-file records: {error}", file=sys.stderr)
         return 2
+    context, context_errors = _parse_trusted_context(context_data)
+    if context_errors:
+        for error in context_errors:
+            print(f"error: trusted PR context: {error}", file=sys.stderr)
+        return 2
     assert subjects is not None
     assert file_records is not None
+    assert context is not None
     errors = (
         validate_subject(title)
         + validate_pr_body(body)
         + validate_commit_subjects(subjects)
-        + validate_governance_changes(file_records)
+        + validate_trusted_change_policy(
+            title,
+            body,
+            file_records,
+            context,
+        )
     )
     for error in errors:
         print(f"error: {error}", file=sys.stderr)
@@ -288,6 +378,29 @@ def extract_required_sections(body: str) -> dict[str, str]:
     return sections
 
 
+def extract_named_h2_section(body: str, name: str) -> str:
+    """Return comment-stripped content of one exact H2 section."""
+    cleaned = HTML_COMMENT_PATTERN.sub("", body)
+    target = f"## {name}"
+    active = False
+    buffer: list[str] = []
+
+    for line in cleaned.splitlines():
+        stripped = line.strip()
+        is_h2 = stripped.startswith("##") and not stripped.startswith("###")
+
+        if is_h2:
+            if active:
+                break
+            active = stripped == target
+            continue
+
+        if active:
+            buffer.append(line)
+
+    return "\n".join(buffer).strip()
+
+
 def validate_pr_body(body: str) -> list[str]:
     """Return human-readable violations for a PR body; empty means valid."""
     errors: list[str] = []
@@ -307,6 +420,143 @@ def validate_pr_body(body: str) -> list[str]:
             errors.append(f"duplicated required section: ## {name}")
         elif not sections.get(name, ""):
             errors.append(f"empty required section: ## {name}")
+    verification = sections.get("Verification", "")
+
+    if verification:
+        for marker in VERIFICATION_REQUIRED_MARKERS:
+            if marker not in verification:
+                errors.append(
+                    f"Verification must reference authoritative check {marker}"
+                )
+
+        for pattern in VOLATILE_VERIFICATION_PATTERNS:
+            match = pattern.search(verification)
+            if match is not None:
+                errors.append(
+                    "Verification contains volatile execution evidence: "
+                    f"{match.group(0)!r}"
+                )
+    return errors
+
+
+TRUSTED_CONTEXT_FIELDS = (
+    "base_ref",
+    "head_ref",
+    "base_repo",
+    "head_repo",
+    "author_association",
+)
+
+
+def _parse_trusted_context(
+    data: object,
+) -> tuple[dict[str, str] | None, list[str]]:
+    if not isinstance(data, dict):
+        return None, ["trusted PR context must be an object"]
+
+    context: dict[str, str] = {}
+    errors: list[str] = []
+
+    for field in TRUSTED_CONTEXT_FIELDS:
+        value = data.get(field)
+
+        if not isinstance(value, str):
+            errors.append(f"trusted PR context field {field!r} must be a string")
+            continue
+
+        if not value or value != value.strip():
+            errors.append(f"trusted PR context field {field!r} is invalid")
+            continue
+
+        if "\n" in value or "\r" in value:
+            errors.append(f"trusted PR context field {field!r} contains a newline")
+            continue
+
+        context[field] = value
+
+    if errors:
+        return None, errors
+
+    return context, []
+
+
+def validate_trusted_change_policy(
+    title: str,
+    body: str,
+    records: list[dict],
+    context: dict[str, str],
+) -> list[str]:
+    """Validate ordinary versus governance-maintenance PR boundaries."""
+    errors: list[str] = []
+
+    protected_change = _records_contain_protected_path(records)
+
+    maintenance_section = extract_named_h2_section(
+        body,
+        GOVERNANCE_MAINTENANCE_HEADING,
+    )
+
+    maintenance_heading_present = bool(
+        re.search(
+            r"(?m)^##\s+Governance maintenance\s*$",
+            HTML_COMMENT_PATTERN.sub("", body),
+        )
+    )
+
+    maintenance_mode = (
+        maintenance_section.splitlines()[0].strip() if maintenance_section else ""
+    )
+
+    if not protected_change:
+        errors.extend(
+            validate_governance_changes(
+                records,
+                maintenance=False,
+            )
+        )
+
+        if maintenance_heading_present:
+            errors.append(
+                "Governance maintenance section is only valid for "
+                "governance-root changes"
+            )
+
+        return errors
+
+    errors.extend(
+        validate_governance_changes(
+            records,
+            maintenance=True,
+        )
+    )
+
+    if not maintenance_heading_present:
+        errors.append("protected changes require ## Governance maintenance")
+    elif maintenance_mode != GOVERNANCE_MAINTENANCE_MODE:
+        errors.append(
+            "Governance maintenance section must begin with "
+            f"{GOVERNANCE_MAINTENANCE_MODE!r}"
+        )
+
+    if GOVERNANCE_MAINTENANCE_TITLE_PATTERN.fullmatch(title) is None:
+        errors.append(
+            "governance maintenance title must use <type>(governance): <summary>"
+        )
+
+    if context["base_ref"] != "main":
+        errors.append("governance maintenance base branch must be main")
+
+    head_ref = context["head_ref"]
+
+    if not head_ref.startswith("governance/") or head_ref == "governance/":
+        errors.append("governance maintenance head branch must begin with governance/")
+
+    if context["base_repo"] != context["head_repo"]:
+        errors.append("governance maintenance must originate from the same repository")
+
+    if context["author_association"] not in TRUSTED_MAINTENANCE_ASSOCIATIONS:
+        errors.append("governance maintenance author association is not trusted")
+
     return errors
 
 
@@ -392,6 +642,7 @@ def main(argv: list[str] | None = None) -> int:
     trusted_parser.add_argument("--body-file", required=True)
     trusted_parser.add_argument("--commits-file", required=True)
     trusted_parser.add_argument("--files-file", required=True)
+    trusted_parser.add_argument("--context-file", required=True)
     args = parser.parse_args(argv)
     if args.command == "pr":
         return run_pr(args.title, args.body_file)
@@ -399,7 +650,11 @@ def main(argv: list[str] | None = None) -> int:
         return run_commits(args.base, args.head)
     if args.command == "trusted-pr":
         return run_trusted_pr(
-            args.title, args.body_file, args.commits_file, args.files_file
+            args.title,
+            args.body_file,
+            args.commits_file,
+            args.files_file,
+            args.context_file,
         )
     parser.error(f"unknown command: {args.command}")
     return 2
