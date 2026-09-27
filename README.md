@@ -1,75 +1,85 @@
-# ImageMD
+# ImageMD _(imagemd)_
 
-![Python](https://img.shields.io/badge/Python-3.12%2B-blue)
-![Platform](https://img.shields.io/badge/Platform-Windows-0078D6)
-![Status](https://img.shields.io/badge/Status-Stable-success)
+![Python](https://img.shields.io/badge/Python-3.12%20%E2%80%93%203.14-blue)
+![Status](https://img.shields.io/badge/Status-Beta-yellow)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
-Herramienta de escritorio de alto rendimiento diseñada para la reparación, análisis y normalización de metadatos en archivos de imagen y video. Especializada en la recuperación de marcas de tiempo a partir de nombres de archivo (WhatsApp, Signal, Telegram, iOS) y la reparación binaria de estructuras PNG corruptas.
+Desktop metadata analysis and repair tool for image and video files
 
-## Arquitectura e Implementación
+ImageMD is a desktop application for inspecting, normalizing, and repairing
+metadata in image and video files. It can recover timestamps from file names,
+read standard and embedded metadata, update media timestamps, and repair
+supported PNG corruption.
 
-Esta aplicación cuenta con una arquitectura modular que separa estrictamente la lógica de presentación, negocio y acceso a datos.
+The repository and application use the `ImageMD` name. The Python project
+metadata uses the normalized distribution name `imagemd`.
 
-*   **Interfaz Gráfica (GUI):** Implementada con `ttkbootstrap` (tema `darkly`) sobre Tkinter. Utiliza un patrón Productor-Consumidor con `queue.Queue` para gestionar eventos, desacoplando el renderizado de la UI del procesamiento lógico.
-*   **Concurrencia:** El escaneo y procesamiento de archivos se ejecuta mediante `concurrent.futures.ThreadPoolExecutor`. El número de hilos se ajusta dinámicamente según la CPU disponible, garantizando que la interfaz permanezca responsiva durante operaciones intensivas de E/S.
-*   **Motor de Fechas:** `src/date_utils.py` implementa un sistema de expresiones regulares optimizado para extraer fechas de nomenclaturas no estándar (WhatsApp ES/EN, Unix timestamps, etc.). Gestiona explícitamente la conversión de zonas horarias para asegurar compatibilidad con Python 3.12+.
-*   **Gestión de Metadatos:** `src/media_ops.py` utiliza una estrategia de fallback en cascada: lectura estándar (Pillow/Piexif), seguida de FFmpeg para video, y finalmente un "Deep Scan" que analiza los primeros 64KB binarios del archivo en busca de patrones de fecha raw o XMP incrustado.
-*   **Reparación de PNG:** `src/repair.py` realiza análisis a nivel de byte para detectar y corregir chunks `IHDR` desplazados, un tipo de corrupción común generada por guardados defectuosos en software de terceros.
-*   **Configuración:** Centralizada en `src/config.py`, facilitando la localización (actualmente en español) y el mantenimiento de constantes.
+## Install
 
-## Estructura del Proyecto
+ImageMD requires Python 3.12 through 3.14. Clone the repository and install the
+locked environment with uv:
 
-```text
-imagemd/
-├── src/
-│   ├── config.py       # Configuración central y localización (ES)
-│   ├── date_utils.py   # Motor de regex y normalización de fechas
-│   ├── gui.py          # Interfaz gráfica (Producer-Consumer/Threads)
-│   ├── media_ops.py    # Abstracción I/O Metadatos (Piexif/Pillow/FFmpeg)
-│   └── repair.py       # Reparación binaria de bajo nivel (PNG IHDR)
-├── tests/
-│   └── test_patterns.py # Pruebas unitarias de expresiones regulares
-├── main.py             # Punto de entrada de la aplicación GUI
-├── repair_tool.py      # CLI independiente para reparación de imágenes
-├── imagemd.spec        # Especificación de compilación PyInstaller
-└── requirements.txt    # Dependencias fijadas para reproducibilidad
+```sh
+git clone https://github.com/roymejia2217/ImageMD.git
+cd ImageMD
+uv sync --locked
 ```
 
-## Dependencias
+### Dependencies
 
-El proyecto asegura la reproducibilidad mediante versiones fijadas en `requirements.txt`:
+FFmpeg and FFprobe must be available on `PATH` for full video metadata
+support. Without FFmpeg, video metadata updates are limited to filesystem
+timestamps.
 
-*   **ttkbootstrap (1.19.0):** Framework de UI moderno.
-*   **Pillow (12.0.0):** Manipulación de imágenes rasterizadas.
-*   **piexif (1.1.3):** Manipulación específica de metadatos EXIF en JPEG.
-*   **ffmpeg-python (0.2.0):** Wrapper para operaciones de video.
+## Usage
 
-### Versión del Sistema
+Launch the desktop application from the synchronized environment:
 
-Para el procesamiento de video, la aplicación se vincula con la instalación local de FFmpeg
-
-Se recomienda FFmpeg v8.0.1 `8.0.1-essentials_build-www.gyan.dev`, debido a que esta fue la versión que se utilizo para las pruebas de la aplicación.
-
-## Ejecución y Distribución
-
-### Código Fuente
-Para ejecutar la aplicación directamente en un entorno de desarrollo Python:
-
-```bash
-python main.py
+```sh
+uv run imagemd
 ```
 
-### Compilación Local
-El repositorio incluye el archivo de configuración `imagemd.spec` necesario para generar un ejecutable optimizado. Si desea construir el binario por su cuenta:
+### CLI
 
-```bash
-pyinstaller imagemd.spec --clean
+ImageMD also provides a PNG repair command. Start with `--dry-run` to inspect
+what would be repaired without modifying files:
+
+```sh
+uv run imagemd-repair /path/to/file-or-directory --dry-run
 ```
 
-El ejecutable resultante (`ImageMD.exe`) se generará en la carpeta `dist/`
+Remove `--dry-run` to apply supported repairs. Add `--verbose` or `-v` for
+more detailed output.
 
-### Releases
-Para uso inmediato sin configuración de entorno, descargue el ejecutable precompilado más reciente desde la sección de [**Releases**](https://github.com/roymejia2217/ImageMD/releases/latest) de este repositorio.
+## Architecture
 
-Las distribuciones Linux planificadas para la release 1.1 son paquetes DEB, RPM, Flatpak, AppImage y Arch. Cada formato se publicará únicamente después de superar sus validaciones de instalación, ejecución y compatibilidad correspondientes.
+- `src/gui.py` contains the desktop interface.
+- `src/media_ops.py` handles image and video metadata operations.
+- `src/date_utils.py` provides filename-date extraction and normalization.
+- `src/repair.py` contains low-level PNG inspection and repair behavior.
+- `main.py` and `repair_tool.py` expose the application entry points.
+
+## Development
+
+The repository uses locked dependencies, Ruff, the Python unittest suite,
+package builds, Conventional Commits, and required GitHub checks. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the authoritative contribution and
+verification workflow.
+
+## Releases
+
+Prebuilt releases are published through the repository's
+[GitHub Releases](https://github.com/roymejia2217/ImageMD/releases).
+
+## Contributing
+
+Pull requests are accepted when they follow the repository's governed change
+process. Read [CONTRIBUTING.md](CONTRIBUTING.md) before making changes.
+
+Use [GitHub Issues](https://github.com/roymejia2217/ImageMD/issues) for project
+questions and defect reports. Contributions must satisfy the repository's
+branch, Conventional Commit, verification, and required-check policies.
+
+## License
+
+MIT © 2026 Roy Mejia. See [LICENSE](LICENSE).
