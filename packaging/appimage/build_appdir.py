@@ -59,15 +59,15 @@ def create(stage: Path, appdir: Path, ffmpeg: Path, ffprobe: Path) -> Path:
         shutil.copyfile(binary, target)
         target.chmod(0o755)
     desktop = f"usr/share/applications/{PACKAGE_ID}.desktop"
-    icon = f"usr/share/icons/hicolor/scalable/apps/{PACKAGE_ID}.svg"
+    icon = f"usr/share/icons/hicolor/256x256/apps/{PACKAGE_ID}.png"
     os.symlink(
         f"{PACKAGE_ID}.metainfo.xml",
         appdir / "usr" / "share" / "metainfo" / f"{PACKAGE_ID}.appdata.xml",
     )
     for target, source in (
         (f"{PACKAGE_ID}.desktop", desktop),
-        (f"{PACKAGE_ID}.svg", icon),
-        (".DirIcon", f"{PACKAGE_ID}.svg"),
+        (f"{PACKAGE_ID}.png", icon),
+        (".DirIcon", f"{PACKAGE_ID}.png"),
     ):
         os.symlink(source, appdir / target)
     apprun = appdir / "AppRun"

@@ -23,7 +23,10 @@ class TestAppImageRuntimeContract(unittest.TestCase):
             required = (
                 "usr/bin/imagemd",
                 "usr/share/applications/org.roymejia.ImageMD.desktop",
-                "usr/share/icons/hicolor/scalable/apps/org.roymejia.ImageMD.svg",
+                "usr/share/icons/hicolor/16x16/apps/org.roymejia.ImageMD.png",
+                "usr/share/icons/hicolor/32x32/apps/org.roymejia.ImageMD.png",
+                "usr/share/icons/hicolor/48x48/apps/org.roymejia.ImageMD.png",
+                "usr/share/icons/hicolor/256x256/apps/org.roymejia.ImageMD.png",
                 "usr/share/metainfo/org.roymejia.ImageMD.metainfo.xml",
                 "usr/share/doc/imagemd/copyright",
                 "usr/share/man/man1/imagemd.1",
@@ -72,7 +75,10 @@ class TestAppImageRuntimeContract(unittest.TestCase):
                         for relative in (
                             "usr/bin/imagemd",
                             "usr/share/applications/org.roymejia.ImageMD.desktop",
-                            "usr/share/icons/hicolor/scalable/apps/org.roymejia.ImageMD.svg",
+                            "usr/share/icons/hicolor/16x16/apps/org.roymejia.ImageMD.png",
+                            "usr/share/icons/hicolor/32x32/apps/org.roymejia.ImageMD.png",
+                            "usr/share/icons/hicolor/48x48/apps/org.roymejia.ImageMD.png",
+                            "usr/share/icons/hicolor/256x256/apps/org.roymejia.ImageMD.png",
                             "usr/share/metainfo/org.roymejia.ImageMD.metainfo.xml",
                             "usr/share/doc/imagemd/copyright",
                             "usr/share/man/man1/imagemd.1",

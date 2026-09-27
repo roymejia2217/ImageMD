@@ -68,11 +68,23 @@ def create_stage(bundle: Path, destination: Path) -> dict[str, object]:
         usr / "share" / "applications" / f"{PACKAGE_ID}.desktop",
         0o644,
     )
-    copy_file(
-        common / f"{PACKAGE_ID}.svg",
-        usr / "share" / "icons" / "hicolor" / "scalable" / "apps" / f"{PACKAGE_ID}.svg",
-        0o644,
-    )
+    for size in (16, 32, 48, 256):
+        copy_file(
+            common
+            / "icons"
+            / "hicolor"
+            / f"{size}x{size}"
+            / "apps"
+            / f"{PACKAGE_ID}.png",
+            usr
+            / "share"
+            / "icons"
+            / "hicolor"
+            / f"{size}x{size}"
+            / "apps"
+            / f"{PACKAGE_ID}.png",
+            0o644,
+        )
     copy_file(
         common / f"{PACKAGE_ID}.metainfo.xml",
         usr / "share" / "metainfo" / f"{PACKAGE_ID}.metainfo.xml",

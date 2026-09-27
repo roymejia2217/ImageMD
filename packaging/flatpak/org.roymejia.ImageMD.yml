@@ -32,7 +32,10 @@ modules:
     build-commands:
       - install -Dm755 usr/bin/imagemd /app/bin/imagemd
       - install -Dm644 usr/share/applications/org.roymejia.ImageMD.desktop /app/share/applications/org.roymejia.ImageMD.desktop
-      - install -Dm644 usr/share/icons/hicolor/scalable/apps/org.roymejia.ImageMD.svg /app/share/icons/hicolor/scalable/apps/org.roymejia.ImageMD.svg
+      - install -Dm644 usr/share/icons/hicolor/16x16/apps/org.roymejia.ImageMD.png /app/share/icons/hicolor/16x16/apps/org.roymejia.ImageMD.png
+      - install -Dm644 usr/share/icons/hicolor/32x32/apps/org.roymejia.ImageMD.png /app/share/icons/hicolor/32x32/apps/org.roymejia.ImageMD.png
+      - install -Dm644 usr/share/icons/hicolor/48x48/apps/org.roymejia.ImageMD.png /app/share/icons/hicolor/48x48/apps/org.roymejia.ImageMD.png
+      - install -Dm644 usr/share/icons/hicolor/256x256/apps/org.roymejia.ImageMD.png /app/share/icons/hicolor/256x256/apps/org.roymejia.ImageMD.png
       - install -Dm644 usr/share/metainfo/org.roymejia.ImageMD.metainfo.xml /app/share/metainfo/org.roymejia.ImageMD.metainfo.xml
       - install -Dm644 usr/share/licenses/imagemd/LICENSE /app/share/licenses/imagemd/LICENSE
       - install -Dm644 usr/share/man/man1/imagemd.1 /app/share/man/man1/imagemd.1
