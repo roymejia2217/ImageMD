@@ -1,3 +1,4 @@
+import json
 import re
 import tomllib
 import unittest
@@ -8,6 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PYPROJECT = ROOT / "pyproject.toml"
 LOCK = ROOT / "uv.lock"
 VERIFY = ROOT / ".github" / "workflows" / "verify.yml"
+README_POLICY = ROOT / "ci" / "readme-policy"
+README_POLICY_PACKAGE = README_POLICY / "package.json"
+README_POLICY_REMARK = README_POLICY / ".remarkrc.json"
 
 
 class QualityWorkflowContractTests(unittest.TestCase):
@@ -108,6 +112,7 @@ class QualityWorkflowContractTests(unittest.TestCase):
         self.assertRegex(aggregate, r"(?m)^\s+timeout-minutes:\s*5\s*$")
         self.assertIn("contents: read", aggregate)
         self.assertIn("needs.quality.result", aggregate)
+        self.assertNotIn("needs.documentation.result", aggregate)
 
     def test_required_ci_aggregate_does_not_repeat_work(self):
         aggregate = self._job_sections(self.workflow)["required-ci"]
@@ -137,6 +142,78 @@ class QualityWorkflowContractTests(unittest.TestCase):
                 self.assertIn(fragment, self.workflow)
         self.assertRegex(self.workflow, r"(?m)^  pull_request:\s*$")
         self.assertRegex(self.workflow, r"(?m)^permissions:\n  contents: read\s*$")
+
+
+class DocumentationPolicyContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = VERIFY.read_text(encoding="utf-8")
+        cls.package = json.loads(README_POLICY_PACKAGE.read_text(encoding="utf-8"))
+        cls.remark = json.loads(README_POLICY_REMARK.read_text(encoding="utf-8"))
+        cls.sections = QualityWorkflowContractTests._job_sections(cls.workflow)
+
+    def test_policy_uses_only_locked_upstream_remark_tooling(self):
+        self.assertNotIn("scripts", self.package)
+        self.assertEqual(
+            self.package["devDependencies"],
+            {
+                "remark-cli": "12.0.1",
+                "remark-preset-lint-consistent": "6.0.1",
+                "remark-preset-lint-recommended": "7.0.1",
+                "standard-readme-preset": "1.0.13",
+            },
+        )
+
+    def test_remark_configuration_uses_upstream_standard_readme_rules(self):
+        self.assertEqual(
+            self.remark["plugins"],
+            [
+                "standard-readme-preset",
+                [
+                    "standard-readme-preset/rules/require-sections.js",
+                    {"installable": True},
+                ],
+                "remark-preset-lint-recommended",
+                "remark-preset-lint-consistent",
+            ],
+        )
+
+    def test_quality_job_runs_standard_readme_in_pinned_node_container(self):
+        quality = self.sections["quality"]
+        self.assertIn(
+            "docker.io/library/node:24.14.1-bookworm-slim@"
+            "sha256:b506e7321f176aae77317f99d67a24b272c1f09f1d10f1761f2773447d8da26c",
+            quality,
+        )
+        self.assertIn('--volume "$PWD:/ImageMD"', quality)
+        self.assertIn("--workdir /ImageMD", quality)
+        self.assertIn("npm ci", quality)
+        self.assertIn(
+            "ci/readme-policy/node_modules/.bin/remark README.md --frail "
+            "--rc-path ci/readme-policy/.remarkrc.json",
+            quality,
+        )
+        self.assertNotIn("setup-node", self.workflow)
+        self.assertNotIn("|| true", quality)
+        self.assertNotIn("continue-on-error", quality)
+
+    def test_quality_job_checks_links_in_pinned_lychee_container(self):
+        quality = self.sections["quality"]
+        self.assertIn(
+            "lycheeverse/lychee:0.24.2@"
+            "sha256:e2d19e57cf6ab037026f20b8e449a1f30d9d7f81eef4194763aab2eab20bd28d",
+            quality,
+        )
+        self.assertIn('--volume "$PWD:/ImageMD:ro"', quality)
+        self.assertIn("--workdir /ImageMD", quality)
+        self.assertIn("--no-progress --root-dir . README.md", quality)
+        self.assertNotIn("lychee-action", self.workflow)
+
+    def test_readme_policy_does_not_expand_the_workflow_action_surface(self):
+        action_pattern = re.compile(
+            r"(?m)^\s+uses: ([^@\s]+)@([0-9a-f]{40})(?:\s+#.*)?$"
+        )
+        self.assertEqual(len(action_pattern.findall(self.workflow)), 3)
 
 
 class CommitGovernanceWorkflowContractTests(unittest.TestCase):
